@@ -11,9 +11,13 @@ for the web app, and `pip install -r requirements.txt`.
 ## Web app
 
 ```bash
-cd web && npm install && npm run build && cd ..
-python -m server            # http://127.0.0.1:8000
+./install.sh   # once: .venv, Python packages, web build (re-run after pulling updates)
+./start.sh     # runs in the background, prints the address (8000, or the next free port)
+./stop.sh      # stops it
 ```
+
+Logs go to `.run/server.log`. To run in the foreground instead:
+`python -m server`.
 
 - **Landing / library** – import a lecture from a YouTube link, an upload, or a
   file already on this computer (linked, not copied). Each lecture is analysed
