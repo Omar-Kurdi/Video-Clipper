@@ -12,19 +12,22 @@ import { clamp, fmt } from "./util";
  * to see the real transition).
  */
 
-const tracks = new Map<string, Promise<[number, number, number][]>>();
-const trackFor = (id: string) => {
-  if (!tracks.has(id)) tracks.set(id, api.speaker(id).catch(() => []));
+type Track = [number, number, number, number?][];
+const tracks = new Map<string, Promise<Track>>();
+export const trackFor = (id: string, fresh = false) => {
+  if (fresh || !tracks.has(id)) tracks.set(id, api.speaker(id).catch(() => []));
   return tracks.get(id)!;
 };
 
-function at(track: [number, number, number][], t: number): [number, number] {
+/** Framing at time t: within one camera interpolate, across a camera change hold. */
+export function at(track: Track, t: number): [number, number] {
   if (!track.length) return [0.5, 0.36];
   let lo = 0, hi = track.length - 1;
   if (t <= track[0][0]) return [track[0][1], track[0][2]];
   if (t >= track[hi][0]) return [track[hi][1], track[hi][2]];
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if (track[m][0] <= t) lo = m; else hi = m; }
-  const [t0, x0, y0] = track[lo], [t1, x1, y1] = track[hi];
+  const [t0, x0, y0, c0] = track[lo], [t1, x1, y1, c1] = track[hi];
+  if (c0 !== c1) return t - t0 < t1 - t ? [x0, y0] : [x1, y1];
   const f = (t - t0) / (t1 - t0 || 1);
   return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f];
 }
@@ -76,7 +79,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
 
   const v0 = useRef<HTMLVideoElement>(null), v1 = useRef<HTMLVideoElement>(null);
   const run = useRef({ k: 0, active: 0, fadeStart: null as number | null, started: false });
-  const [track, setTrack] = useState<[number, number, number][]>([]);
+  const [track, setTrack] = useState<Track>([]);
   const [playing, setPlaying] = useState(false);
   const [outT, setOutT] = useState(0);
   const [srcT, setSrcT] = useState(segs[0]?.[0] ?? 0);
@@ -84,7 +87,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   const [exact, setExact] = useState<string | null>(null);
   const [exactBusy, setExactBusy] = useState(false);
 
-  useEffect(() => { trackFor(ed.lecture.id).then(setTrack); }, [ed.lecture.id]);
+  useEffect(() => { trackFor(ed.lecture.id, ed.framingVersion > 0).then(setTrack); }, [ed.lecture.id, ed.framingVersion]);
 
   const total = segs.reduce((acc, [a, b]) => acc + (b - a), 0) - fade * Math.max(0, segs.length - 1);
   const capStyle = effectiveCaption(ed);

@@ -246,6 +246,44 @@ def lecture_preview(lid: str, body: PreviewIn):
     return Response(jpg, media_type="image/jpeg")
 
 
+class FramingIn(BaseModel):
+    manual: dict | None = None  # {"x": 0..1, "y": 0..1} crop centre / face height, or null for auto
+
+
+@app.get("/api/lectures/{lid}/cameras")
+def lecture_cameras(lid: str, retry: bool = False):
+    if not media.cameras_path(lid).exists():
+        job = jobs.active(lecture_id=lid, kind="cameras")
+        if not job:
+            last = next(iter(jobs.list(lecture_id=lid, kind="cameras")), None)
+            if last and last["status"] == "error" and not retry:
+                return {"status": "error", "message": last["message"], "cameras": []}
+            job = jobs.submit("cameras", lambda report: (media.cameras(lid, report), None)[1], lecture_id=lid)
+        return {"status": "analyzing", "job": job, "cameras": []}
+    data = json.loads(media.cameras_path(lid).read_text())
+    cams = [{k: v for k, v in c.items() if k != "sig"} for c in data["cameras"]]
+    return {"status": "ready", "has_lecturer": data.get("reference") is not None, "cameras": cams}
+
+
+@app.put("/api/lectures/{lid}/cameras/{cid}")
+def set_camera_framing(lid: str, cid: int, body: FramingIn):
+    data = json.loads(media.cameras_path(lid).read_text())
+    cam = next((c for c in data["cameras"] if c["id"] == cid), None)
+    if cam is None:
+        raise HTTPException(404, "no such camera")
+    cam["manual"] = body.manual
+    media.save_cameras(lid, data)
+    return {k: v for k, v in cam.items() if k != "sig"}
+
+
+@app.get("/api/lectures/{lid}/cameras/{cid}/thumb")
+def camera_thumb(lid: str, cid: int):
+    p = store.lecture_dir(lid) / "cameras" / f"cam{cid}.jpg"
+    if not p.exists():
+        raise HTTPException(404, "no thumbnail")
+    return FileResponse(p)
+
+
 @app.get("/api/lectures/{lid}/speaker")
 def lecture_speaker(lid: str):
     return media.speaker_track(lid)
@@ -259,8 +297,10 @@ def lecture_preview_cut(lid: str, body: CutPreviewIn):
     settings = body.model_dump()
     settings["ranges"] = [[max(0.0, a - 1.2), b + 1.2]]
     out = store.lecture_dir(lid) / "tmp" / f"cut-{store.new_id()}.mp4"
+    opts = _options(meta, settings)
+    opts.identity = media.cameras(lid)
     try:
-        make_short(store.source_path(lid), out, _options(meta, settings), log=lambda m: None)
+        make_short(store.source_path(lid), out, opts, log=lambda m: None)
         data = out.read_bytes()
     finally:
         out.unlink(missing_ok=True)
@@ -318,6 +358,8 @@ def render_short(lid: str, sid: str):
     out = store.render_path(lid, sid)
 
     def run(report):
+        report(stage="finding the lecturer")
+        opts.identity = media.cameras(lid)
         tmp = out.with_suffix(".part.mp4")
         res = make_short(store.source_path(lid), tmp, opts,
                          progress=lambda stage, f: report(progress=f, stage=stage),

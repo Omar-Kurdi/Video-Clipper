@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, defaultSettings, type Estimate, type Job, type Lecture, type Range, type Short,
+  api, defaultSettings, type Cameras, type Estimate, type Job, type Lecture, type Range, type Short,
   type ShortSettings, type Styles, type Transcript,
 } from "./api";
 import { go } from "./main";
@@ -34,6 +34,9 @@ export interface Ed {
   transcribe: () => Promise<void>;
   transcribeJob: Job | null;
   renderedVersion: number;
+  cameras: Cameras | null;
+  framingVersion: number;
+  setFraming: (cid: number, manual: { x: number; y: number } | null) => Promise<void>;
   time: number;
   setTime: (t: number) => void;
 }
@@ -56,6 +59,9 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   const [error, setError] = useState<string | null>(null);
   const [time, setTime] = useState(0);
   const [renderedVersion, setRenderedVersion] = useState(Date.now());
+  const [cameras, setCameras] = useState<Cameras | null>(null);
+  const [framingVersion, setFramingVersion] = useState(0);
+  const loadCameras = useCallback(() => api.cameras(lectureId).then(setCameras).catch(() => {}), [lectureId]);
   const dirty = useRef<Set<string>>(new Set());
   // previous session's shorts, hidden after a reload until restored or discarded
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -72,6 +78,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
     api.speech(lectureId).then(setSpeech).catch(() => {});
     loadTranscript();
     refreshStyles();
+    loadCameras();
     api.shorts(lectureId).then(async (list) => {
       const fresh = !opened.has(lectureId);
       opened.add(lectureId);
@@ -102,6 +109,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
         const before = prev.find((p) => p.id === j.id);
         if (j.status === "done" && before && before.status !== "done") {
           if (j.kind === "transcribe") { loadTranscript(); api.lecture(lectureId).then(setLecture); }
+          if (j.kind === "cameras") { loadCameras(); setFramingVersion((v) => v + 1); }
           if (j.kind === "render") {
             setRenderedVersion(Date.now());
             api.shorts(lectureId).then((list) => setShorts((cur) => cur.map((c) => {
@@ -113,7 +121,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       }
       return next;
     });
-  }, [lectureId, loadTranscript]);
+  }, [lectureId, loadTranscript, loadCameras]);
   useEffect(() => { pollJobs(); }, [pollJobs]);
   const busy = jobs.some((j) => j.status === "queued" || j.status === "running");
   useInterval(pollJobs, busy ? 1000 : 6000);
@@ -179,10 +187,16 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       },
       transcribe: async () => { await api.transcribe(lectureId).catch((e) => setError(e.message)); pollJobs(); },
       transcribeJob: jobs.find((j) => j.kind === "transcribe" && (j.status === "queued" || j.status === "running")) ?? null,
-      renderedVersion, time, setTime,
+      renderedVersion, time, setTime, cameras, framingVersion,
+      setFraming: async (cid, manual) => {
+        const cam = await api.setFraming(lectureId, cid, manual).catch((e) => { setError(e.message); return null; });
+        if (!cam) return;
+        setCameras((c) => c && { ...c, cameras: c.cameras.map((x) => (x.id === cid ? cam : x)) });
+        setFramingVersion((v) => v + 1);
+      },
     };
   }, [lecture, visible, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
-    renderedVersion, time, lectureId, mode, pollJobs]);
+    renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion]);
 
   if (error && !lecture) return <div className="fatal"><p>{error}</p><a href="#/">Back to library</a></div>;
   if (!ed) return <div className="fatal"><p>Loading…</p></div>;

@@ -37,6 +37,7 @@ class ShortOptions:
     language: str | None = "ar"
     model: str = "large-v3"
     device: str = "cuda"
+    identity: dict | None = None     # camera analysis (cameras.json): lecturer + per-camera framing
     extra: dict = field(default_factory=dict)
 
 
@@ -111,7 +112,7 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
         range_joins = [js[i - 1].cut for i in firsts[1:]]
         cb = _stage(progress, "reframe")
         path = crop_path(cut, ReframeSettings(zoom=o.zoom), forced=range_joins,
-                         on_frame=lambda i: cb(i / n_out))
+                         on_frame=lambda i: cb(i / n_out), identity=o.identity)
 
         # same camera -> synthesized transition; camera change -> clean hard cut
         windows, hard = {}, 0

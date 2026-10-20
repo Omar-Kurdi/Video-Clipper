@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Range } from "./api";
 import { TopBar, type Ed } from "./Editor";
-import { CaptionsPanel, ClipList, CutsPanel, FramingPanel, Preview, Stats } from "./panels";
+import { CaptionsPanel, ClipList, CutsPanel, FramingPanel, Preview, Stats, cropWidth } from "./panels";
+import { at, trackFor } from "./Quick";
 import { Timeline } from "./Timeline";
 import { clamp, fmt } from "./util";
 
@@ -16,6 +17,11 @@ export function Studio({ ed }: { ed: Ed }) {
   const [view, setView] = useState<Range>([0, Math.min(duration || 120, 120)]);
   const [tab, setTab] = useState<Tab>("cuts");
   const stopAt = useRef<number | null>(null);
+  const [track, setTrack] = useState<[number, number, number, number?][]>([]);
+  const [guideDrag, setGuideDragState] = useState<number | null>(null);
+  const guideRef = useRef<number | null>(null);
+  const setGuideDrag = (v: number | null) => { guideRef.current = v; setGuideDragState(v); };
+  useEffect(() => { trackFor(ed.lecture.id, ed.framingVersion > 0).then(setTrack); }, [ed.lecture.id, ed.framingVersion]);
 
   // smooth playhead while playing
   useEffect(() => {
@@ -87,8 +93,21 @@ export function Studio({ ed }: { ed: Ed }) {
   });
 
   const s = ed.short;
-  const W = ed.lecture.width ?? 1920, H = ed.lecture.height ?? 1080;
-  const cropW = ((H / (s?.zoom ?? 1)) * 9) / 16 / W * 100;
+  const cw = cropWidth(ed, s?.zoom ?? 1);
+  // which camera is on screen now, and how it is framed
+  const near = track.length ? track.reduce((b, p) => (Math.abs(p[0] - time) < Math.abs(b[0] - time) ? p : b)) : null;
+  const camId = near?.[3];
+  const cam = ed.cameras?.cameras.find((c) => c.id === camId) ?? null;
+  const fx = guideDrag ?? (track.length ? at(track, time)[0] : 0.5);
+  const guideLeft = Math.min(1 - cw, Math.max(0, fx - cw / 2)) * 100;
+  const camIndex = cam ? [...(ed.cameras?.cameras ?? [])].filter((c) => c.share >= 0.02).sort((a, b) => b.share - a.share).findIndex((c) => c.id === cam.id) : -1;
+  const guideLabel = cam
+    ? `${camIndex >= 0 ? `Camera ${camIndex + 1}` : "Cutaway"} · ${cam.manual ? "manual" : cam.has_speaker ? "on the lecturer" : "centred"} · drag to adjust`
+    : "9:16 · follows the lecturer";
+  const guideX = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+    return Math.min(1 - cw / 2, Math.max(cw / 2, (e.clientX - r.left) / r.width));
+  };
   const span = view[1] - view[0];
   const zoomTo = (ns: number) => {
     ns = clamp(ns, 5, duration);
@@ -106,8 +125,17 @@ export function Studio({ ed }: { ed: Ed }) {
             <video ref={video} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline
               onPlay={() => setPlaying(true)} onPause={() => { setPlaying(false); setTime(video.current?.currentTime ?? 0); }}
               onSeeked={() => setTime(video.current?.currentTime ?? 0)} onClick={toggle} />
-            <div className="crop-guide" style={{ width: `${cropW}%`, left: `${(100 - cropW) / 2}%` }} aria-hidden="true">
-              <span>9:16 · follows the speaker</span>
+            <div className={`crop-guide ${cam ? "draggable" : ""} ${cam?.manual ? "manual" : ""}`}
+              style={{ width: `${cw * 100}%`, left: `${guideLeft}%` }}
+              onPointerDown={(e) => { if (!cam) return; e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); setGuideDrag(guideX(e)); }}
+              onPointerMove={(e) => guideRef.current != null && setGuideDrag(guideX(e))}
+              onPointerUp={(e) => {
+                if (guideRef.current == null || !cam) return;
+                const x = guideX(e);
+                ed.setFraming(cam.id, { x: Math.round(x * 1000) / 1000, y: cam.manual?.y ?? cam.auto?.y ?? 0.36 });
+                setGuideDrag(null);
+              }}>
+              <span>{guideLabel}</span>
             </div>
           </div>
           <div className="transport">

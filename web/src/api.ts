@@ -2,7 +2,7 @@ export type Range = [number, number];
 
 export interface Job {
   id: string;
-  kind: "download" | "analyze" | "transcribe" | "render";
+  kind: "download" | "analyze" | "transcribe" | "render" | "cameras";
   status: "queued" | "running" | "done" | "error";
   progress: number;
   stage: string;
@@ -92,6 +92,16 @@ export interface Transcript {
   segments: { s: number; e: number; w0: number; w1: number }[];
 }
 
+export interface Camera {
+  id: number;
+  count: number;
+  share: number;
+  has_speaker: boolean;
+  auto: { x: number; y: number; w: number } | null;
+  manual: { x: number; y: number } | null;
+}
+export interface Cameras { status: "ready" | "analyzing"; has_lecturer?: boolean; cameras: Camera[]; job?: Job }
+
 export interface Styles {
   presets: Record<string, { captions: TextStyle; title: TextStyle }>;
   custom: Record<string, StyleData>;
@@ -138,7 +148,11 @@ export const api = {
     if (!r.ok) throw new Error("preview failed");
     return URL.createObjectURL(await r.blob());
   },
-  speaker: (id: string) => req<[number, number, number][]>(`/api/lectures/${id}/speaker`),
+  speaker: (id: string) => req<[number, number, number, number?][]>(`/api/lectures/${id}/speaker`),
+  cameras: (id: string) => req<Cameras>(`/api/lectures/${id}/cameras`),
+  setFraming: (id: string, cid: number, manual: { x: number; y: number } | null) =>
+    req<Camera>(`/api/lectures/${id}/cameras/${cid}`, json({ manual }, "PUT")),
+  cameraThumb: (id: string, cid: number) => `/api/lectures/${id}/cameras/${cid}/thumb`,
   previewCut: async (id: string, s: ShortSettings, pause: Range) => {
     const r = await fetch(`/api/lectures/${id}/preview-cut`, json({ ...s, pause }));
     if (!r.ok) throw new Error("cut preview failed");

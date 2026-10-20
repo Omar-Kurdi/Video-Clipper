@@ -6,6 +6,7 @@
 import argparse
 from pathlib import Path
 
+from .cameras import load_or_analyze
 from .pipeline import ShortOptions, make_short
 from .transcribe import transcribe
 from .util import parse_range
@@ -22,6 +23,9 @@ def cmd_make(a) -> None:
         min_gap=a.min_gap, transition=a.transition, transition_frames=a.transition_frames,
         zoom=a.zoom, grade=a.grade, captions=not a.no_captions,
         language=a.lang or None, model=a.model, device=a.device)
+    if not a.no_lock:
+        print("finding the lecturer and the camera positions (cached after the first run) ...")
+        o.identity = load_or_analyze(a.video, a.video.with_suffix(".cameras.json"))
     make_short(a.video, a.output, o, keep_temp=a.keep_temp)
     print(f"done: {a.output}")
 
@@ -57,6 +61,8 @@ def main() -> None:
     m.add_argument("--font", help="override the style font (fontconfig name or .ttf path)")
     m.add_argument("--grade", action="store_true", help="punchier contrast/sharpen/vignette")
     m.add_argument("--no-captions", action="store_true")
+    m.add_argument("--no-lock", action="store_true",
+                   help="follow the main face instead of recognising and locking on the lecturer")
     m.add_argument("--keep-temp", action="store_true")
     m.set_defaults(fn=cmd_make)
 

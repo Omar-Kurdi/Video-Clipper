@@ -25,12 +25,24 @@ JOIN_THRESHOLD = 25.0          # P vs Q difference above which a join is treated
 REACQUIRE_SAMPLES = SAMPLES_PER_SEC  # ~1 s of rejected faces -> pick the main face again
 
 
+def _near(samples, a: int, b: int, x: float, W: int, radius: float = 0.12):
+    """Face positions in frames [a, b) close to x (the lecturer once he's located)."""
+    pts = []
+    for i, faces in samples:
+        if a <= i < b and faces:
+            f = min(faces, key=lambda f: abs(f[0] - x))
+            if abs(f[0] - x) < radius * W:
+                pts.append((i, f[0], f[1]))
+    return pts
+
+
 @dataclass
 class ReframeSettings:
     zoom: float = 1.0          # >1 crops tighter than full height
     deadzone: float = 0.05     # fraction of source width the face may drift before panning
     tau: float = 0.35          # pan easing time constant (s)
     smooth: float = 0.4        # gaussian sigma on the face track (s)
+    hold: float = 0.07         # with a known lecturer: how far (fraction of width) he may move before the frame follows
     face_y: float = 0.36       # where the face sits vertically in the crop (only when zoom > 1)
 
 
@@ -138,10 +150,10 @@ def _gauss(x: np.ndarray, sigma: float) -> np.ndarray:
     return np.convolve(np.pad(x, r, mode="edge"), k, mode="valid")
 
 
-def _camera(target: np.ndarray, dz: float, alpha: float) -> np.ndarray:
-    """Deadzone + eased follow. Starts on target."""
+def _camera(target: np.ndarray, dz: float, alpha: float, start: float | None = None) -> np.ndarray:
+    """Deadzone + eased follow. Starts at `start` (or the first target)."""
     out = np.empty_like(target)
-    c, moving = target[0], False
+    c, moving = (target[0] if start is None else start), False
     for k, t in enumerate(target):
         err = t - c
         if abs(err) > dz:
@@ -171,11 +183,47 @@ class CropPath:
         return diff > JOIN_THRESHOLD
 
 
+def _lock_shots(video: Path, bounds: list[int], W: int, H: int, identity: dict) -> list[dict]:
+    """Per shot: where the lecturer is (face recognition on a few frames), and
+    the camera it belongs to (for manual framing)."""
+    from .cameras import _recognizer, framing, identify, match_camera, signature
+
+    ref = np.array(identity["reference"], dtype=np.float32) if identity.get("reference") else None
+    det = _detector(W, H)
+    rec = _recognizer() if ref is not None else None
+    cap = cv2.VideoCapture(str(video))
+    out = []
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        hits, sig = [], None
+        for q in (0.2, 0.5, 0.8):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(a + (b - a) * q))
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            if q == 0.5 or sig is None:
+                sig = signature(frame)
+            if ref is not None:
+                hit = identify(frame, det, rec, ref)
+                if hit:
+                    hits.append(hit)
+        cam = match_camera(identity, sig) if (sig is not None and identity.get("cameras")) else None
+        manual = cam.get("manual") if cam else None
+        lect = (float(np.median([h[0] for h in hits])), float(np.median([h[1] for h in hits]))) if hits else None
+        auto = framing(cam) if cam else None
+        out.append({"camera": cam["id"] if cam else None, "manual": manual, "lecturer": lect,
+                     "camera_framing": auto, "found": ref is not None})
+    cap.release()
+    return out
+
+
 def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
-              on_frame=None) -> CropPath:
+              on_frame=None, identity: dict | None = None) -> CropPath:
     """One crop x/y per frame of `video`.
 
     `forced` are extra tracking resets (e.g. where two selected ranges join).
+    `identity` is the lecture's camera analysis (cameras.json): with it the
+    lecturer is recognised in every shot and the frame is locked on him (or on
+    a camera's manual framing); without it the main face is followed.
     """
     fps, W, H, n, d1, dlong, samples, thumbs = _scan(video, on_frame)
     ch = int(H / rs.zoom) // 2 * 2
@@ -185,26 +233,58 @@ def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
 
     detected = _shot_bounds(d1, dlong, fps)
     bounds = sorted(set(detected) | {f for f in forced if 0 < f < n}) + [n]
+    shots = _lock_shots(video, bounds, W, H, identity) if identity else None
     alpha = 1 - np.exp(-1 / (rs.tau * fps))
+    calm = 1 - np.exp(-1 / (max(rs.tau, 0.6) * fps))
     cx_all, cy_all = np.empty(n), np.empty(n)
     last = (W / 2, H / 2)
-    for a, b in zip(bounds[:-1], bounds[1:]):
-        pts = _track_shot(samples, a, b, W)
+    log = []
+    for k, (a, b) in enumerate(zip(bounds[:-1], bounds[1:])):
         frames = np.arange(a, b)
-        if pts:
-            t, x, y = map(np.array, zip(*pts))
-            tx, ty = np.interp(frames, t, x), np.interp(frames, t, y)
-        else:  # no face this shot: hold the previous framing
-            tx, ty = np.full(b - a, last[0]), np.full(b - a, last[1])
-        tx, ty = _gauss(tx, rs.smooth * fps), _gauss(ty, rs.smooth * fps)
-        cx_all[a:b] = _camera(tx, rs.deadzone * W, alpha)
-        cy_all[a:b] = _camera(ty, rs.deadzone * H, alpha)
+        info = shots[k] if shots else None
+        if info and info["manual"]:
+            # the user placed this camera's frame: hold it exactly
+            mx = info["manual"]["x"] * W
+            my = info["manual"].get("y", (info["camera_framing"] or (0.5, 0.36))[1]) * H
+            cx_all[a:b], cy_all[a:b] = mx, my
+            log.append("manual")
+        elif info and (info["lecturer"] or info["camera_framing"]):
+            # lock on the lecturer; only follow if he really moves
+            lx, ly = (info["lecturer"] or info["camera_framing"])
+            lx, ly = lx * W, ly * H
+            pts = _near(samples, a, b, lx, W)
+            if pts:
+                t, x, y = map(np.array, zip(*pts))
+                tx, ty = np.interp(frames, t, x), np.interp(frames, t, y)
+                tx, ty = _gauss(tx, rs.smooth * 2 * fps), _gauss(ty, rs.smooth * 2 * fps)
+            else:
+                tx, ty = np.full(b - a, lx), np.full(b - a, ly)
+            cx_all[a:b] = _camera(tx, rs.hold * W, calm, start=lx)
+            cy_all[a:b] = _camera(ty, rs.hold * H, calm, start=ly)
+            log.append("lecturer" if info["lecturer"] else "camera")
+        elif info and info["found"]:
+            # lecturer not in this shot (audience cutaway): centre it, steady
+            cx_all[a:b], cy_all[a:b] = W / 2, H * 0.4
+            log.append("no lecturer")
+        else:
+            pts = _track_shot(samples, a, b, W)
+            if pts:
+                t, x, y = map(np.array, zip(*pts))
+                tx, ty = np.interp(frames, t, x), np.interp(frames, t, y)
+                start = (float(np.median(x)), float(np.median(y)))
+            else:  # no face this shot: hold the previous framing
+                tx, ty = np.full(b - a, last[0]), np.full(b - a, last[1])
+                start = last
+            tx, ty = _gauss(tx, rs.smooth * fps), _gauss(ty, rs.smooth * fps)
+            cx_all[a:b] = _camera(tx, rs.deadzone * W, alpha, start=start[0])
+            cy_all[a:b] = _camera(ty, rs.deadzone * H, alpha, start=start[1])
+            log.append("face")
         last = (cx_all[b - 1], cy_all[b - 1])
 
     xs = np.clip(np.round(cx_all - cw / 2), 0, W - cw).astype(int)
     ys = np.clip(np.round(cy_all - rs.face_y * ch), 0, H - ch).astype(int)
     print(f"reframe: {n} frames, camera changes at "
-          f"{[round(b / fps, 2) for b in detected[1:]]}, crop {cw}x{ch}")
+          f"{[round(b / fps, 2) for b in detected[1:]]}, crop {cw}x{ch}, shots: {log}")
     return CropPath(cw, ch, xs, ys, detected[1:], thumbs)
 
 

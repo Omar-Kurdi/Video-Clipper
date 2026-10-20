@@ -18,3 +18,4 @@ web/node_modules/
 web/dist/
 .claude/
 .run/
+*.cameras.json

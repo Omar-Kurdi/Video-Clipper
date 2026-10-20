@@ -113,15 +113,58 @@ def analyze(lid: str, report) -> dict:
                                                  "peaks": _waveform(src, info["duration"])}))
     report(progress=0.7, stage="finding pauses")
     (d / "speech.json").write_text(json.dumps(_speech(src)))
-    report(progress=0.9, stage="locating the speaker")
-    speaker_track(lid)
+    report(progress=0.85, stage="finding the lecturer and cameras")
+    cameras(lid)
     store.update_lecture(lid, status="ready")
     return info
+
+
+def cameras_path(lid: str) -> Path:
+    return store.lecture_dir(lid) / "source.cameras.json"
+
+
+def cameras(lid: str, report=None) -> dict:
+    """Camera positions + lecturer identity (analysed once, cached)."""
+    from shorts.cameras import load_or_analyze
+
+    return load_or_analyze(store.source_path(lid), cameras_path(lid),
+                           (lambda f: report(progress=f)) if report else None,
+                           thumbs=store.lecture_dir(lid) / "cameras")
+
+
+def save_cameras(lid: str, data: dict) -> None:
+    cameras_path(lid).write_text(json.dumps(data))
+
+
+def framing_track(lid: str) -> list[list[float]] | None:
+    """[time, x, y] of the intended framing (manual > lecturer > camera > centre)
+    for every analysed sample: what the in-browser preview should show."""
+    p = cameras_path(lid)
+    if not p.exists():
+        return None
+    data = json.loads(p.read_text())
+    by_id = {c["id"]: c for c in data["cameras"]}
+    out = []
+    for t, cid, x, y in data["samples"]:
+        cam = by_id.get(cid, {})
+        if cam.get("manual"):
+            fx, fy = cam["manual"]["x"], cam["manual"].get("y", 0.36)
+        elif x is not None:
+            fx, fy = x, y
+        elif cam.get("auto"):
+            fx, fy = cam["auto"]["x"], cam["auto"]["y"]
+        else:
+            fx, fy = 0.5, 0.4
+        out.append([t, fx, fy, cid])
+    return out
 
 
 def speaker_track(lid: str) -> list[list[float]]:
     """Coarse speaker position for in-browser previews: the main face on every
     keyframe, as [time, x, y] with x/y normalised to the frame. Cached."""
+    track = framing_track(lid)
+    if track is not None:
+        return track
     cache = store.lecture_dir(lid) / "speaker.json"
     if cache.exists():
         return json.loads(cache.read_text())

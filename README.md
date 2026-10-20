@@ -26,6 +26,13 @@ Logs go to `.run/server.log`. To run in the foreground instead:
   drag on the waveform, `Ctrl`+scroll to zoom. No transcript needed.
 - **Transcript** (read & select) – transcribe once, then search the lecture and
   select sentences to make clips. Pauses that will be cut are shown inline.
+- **Framing** – each lecture is analysed once for its camera positions and
+  the lecturer's face (face recognition), so he is found even in wide shots
+  where audience faces are bigger, and held in the same spot every time a
+  camera comes back. In Studio, drag the orange frame on the video (or a camera
+  card in the Framing tab) to set a camera by hand; it applies to every shot
+  from that camera. The CLI does the same (cached in `<video>.cameras.json`;
+  `--no-lock` to just follow the main face).
 - Both modes edit the same short. Settings (pause threshold, morph/fade/jump
   cuts, caption style, name plate, zoom, grade) update a live 9:16 preview;
   **Render** runs in the background and the result plays and downloads in place.

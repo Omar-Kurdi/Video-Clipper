@@ -293,3 +293,15 @@ input.time { width: 86px; height: 28px; border-radius: 6px; border: 1px solid va
 .restore { position: fixed; left: 50%; top: 62px; transform: translateX(-50%); z-index: 40; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
   padding: 10px 12px 10px 16px; border-radius: 14px; background: #1C1B19; color: #F6F4EF; box-shadow: 0 12px 34px rgba(0,0,0,0.35); max-width: calc(100% - 32px); font-size: 14px;
   --accent: #F2B544; --on-accent: #1A1406; --panel: #2A2826; --line: #4A463F; }
+
+/* cameras */
+.cams-head { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.cam-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.cam-card { display: flex; flex-direction: column; gap: 6px; }
+.cam-thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 8px; background: #000 center / cover; cursor: ew-resize; touch-action: none; overflow: hidden; }
+.cam-box { position: absolute; top: 0; bottom: 0; border: 2px solid var(--accent); box-shadow: 0 0 0 999px rgba(0,0,0,0.45); }
+.cam-box.manual { border-color: #6FB6FF; }
+.cam-meta { display: flex; flex-direction: column; gap: 2px; }
+.crop-guide.draggable { pointer-events: auto; cursor: ew-resize; touch-action: none; }
+.crop-guide.manual { border-color: #6FB6FF; }
+.crop-guide.manual span { background: #6FB6FF; color: #0F1113; }

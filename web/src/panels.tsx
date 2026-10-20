@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { api, type Range, type StyleData, type TextStyle } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { api, type Camera, type Range, type StyleData, type TextStyle } from "./api";
 import type { Ed } from "./Editor";
 import { QuickPlayer } from "./Quick";
 import { fmt, parseTime, useDebounced } from "./util";
@@ -147,15 +147,78 @@ export function CutsPanel({ ed }: { ed: Ed }) {
 
 /* ---------- framing ---------- */
 
+export function cropWidth(ed: Ed, zoom: number) {
+  const W = ed.lecture.width ?? 1920, H = ed.lecture.height ?? 1080;
+  return ((H / zoom) * 9) / 16 / W;
+}
+
+/** Thumbnail of one camera with its 9:16 frame; drag the frame to set it by hand. */
+function CameraCard({ ed, cam, index }: { ed: Ed; cam: Camera; index: number }) {
+  const cw = cropWidth(ed, ed.short?.zoom ?? 1);
+  const current = cam.manual?.x ?? cam.auto?.x ?? 0.5;
+  const [drag, setDragState] = useState<number | null>(null);
+  const dragRef = useRef<number | null>(null);
+  const setDrag = (v: number | null) => { dragRef.current = v; setDragState(v); };
+  const x = drag ?? current;
+  const left = Math.min(1 - cw, Math.max(0, x - cw / 2));
+  const fromEvent = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return Math.min(1 - cw / 2, Math.max(cw / 2, (e.clientX - r.left) / r.width));
+  };
+  return (
+    <li className="cam-card">
+      <div className="cam-thumb" style={{ backgroundImage: `url(${api.cameraThumb(ed.lecture.id, cam.id)})` }}
+        onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setDrag(fromEvent(e)); }}
+        onPointerMove={(e) => dragRef.current != null && setDrag(fromEvent(e))}
+        onPointerUp={(e) => {
+          if (dragRef.current == null) return;
+          const nx = fromEvent(e);
+          ed.setFraming(cam.id, { x: Math.round(nx * 1000) / 1000, y: cam.manual?.y ?? cam.auto?.y ?? 0.36 });
+          setDrag(null);
+        }}
+        role="slider" aria-label={`Camera ${index + 1} framing`} aria-valuemin={0} aria-valuemax={100}
+        aria-valuenow={Math.round(x * 100)} tabIndex={0}
+        onKeyDown={(e) => {
+          const step = e.shiftKey ? 0.05 : 0.01;
+          if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+            e.preventDefault();
+            const nx = Math.min(1 - cw / 2, Math.max(cw / 2, current + (e.key === "ArrowLeft" ? -step : step)));
+            ed.setFraming(cam.id, { x: Math.round(nx * 1000) / 1000, y: cam.manual?.y ?? cam.auto?.y ?? 0.36 });
+          }
+        }}>
+        <div className={`cam-box ${cam.manual ? "manual" : ""}`} style={{ left: `${left * 100}%`, width: `${cw * 100}%` }} />
+      </div>
+      <div className="cam-meta">
+        <b>Camera {index + 1}</b>
+        <span className="muted small">{Math.round(cam.share * 100)}% of the lecture · {cam.has_speaker ? "lecturer found" : "no lecturer (audience)"}</span>
+        <span className="small">{cam.manual ? "Manual framing" : cam.has_speaker ? "Auto: locked on the lecturer" : "Auto: centred"}</span>
+        {cam.manual && <button type="button" className="link small" onClick={() => ed.setFraming(cam.id, null)}>Reset to auto</button>}
+      </div>
+    </li>
+  );
+}
+
 export function FramingPanel({ ed }: { ed: Ed }) {
   const s = ed.short;
   if (!s) return null;
+  const cams = (ed.cameras?.cameras ?? []).filter((c) => c.share >= 0.02).sort((a, b) => b.share - a.share);
+  const minor = (ed.cameras?.cameras.length ?? 0) - cams.length;
   return (
     <div className="panel">
       <div className="row"><label htmlFor="zoom">Zoom</label><span className="val">{s.zoom.toFixed(2)}×</span></div>
       <input id="zoom" type="range" min={1} max={1.6} step={0.05} value={s.zoom} onChange={(e) => ed.update({ zoom: +e.target.value })} />
       <label className="check"><input type="checkbox" checked={s.grade} onChange={(e) => ed.update({ grade: e.target.checked })} />Colour grade (contrast, sharpen, vignette)</label>
-      <p className="muted small">The 9:16 frame follows the speaker's face automatically.</p>
+      <div className="cams-head"><b>Cameras</b>
+        <span className="muted small">The lecturer is recognised in every shot and held in place. Drag a frame to set a camera by hand; it applies to every shot from that camera.</span>
+      </div>
+      {!ed.cameras || ed.cameras.status === "analyzing" ? (
+        <p className="muted small">Finding the cameras and the lecturer… (about a minute per hour of lecture)</p>
+      ) : (
+        <ul className="cam-list">
+          {cams.map((c, i) => <CameraCard key={c.id} ed={ed} cam={c} index={i} />)}
+        </ul>
+      )}
+      {minor > 0 && <p className="muted small">{minor} short cutaways (under 2% each) use automatic framing.</p>}
     </div>
   );
 }
