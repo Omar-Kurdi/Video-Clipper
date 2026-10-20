@@ -42,14 +42,18 @@ export function Studio({ ed }: { ed: Ed }) {
     return () => cancelAnimationFrame(raf);
   }, [playing]);
 
-  // keep the playhead in view
+  // keep the playhead in view when it moves (playing or seeking), but never
+  // fight the user scrolling the timeline somewhere else
+  const viewRef = useRef(view);
+  viewRef.current = view;
   useEffect(() => {
-    const span = view[1] - view[0];
-    if (time < view[0] || time > view[1]) {
+    const [a0, b0] = viewRef.current;
+    const span = b0 - a0;
+    if (time < a0 || time > b0) {
       const a = clamp(time - span * 0.1, 0, Math.max(0, duration - span));
       setView([a, a + span]);
     }
-  }, [time, view, duration]);
+  }, [time, duration]);
 
   const seek = useCallback((t: number) => {
     const v = video.current;

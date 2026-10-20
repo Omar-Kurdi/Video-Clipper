@@ -162,7 +162,7 @@ export function Timeline(p: Props) {
       else if (Math.abs(x - xOf(p.selection[1])) < 7) kind = "end";
     }
     drag.current = { kind, anchor: kind === "start" ? p.selection![1] : kind === "end" ? p.selection![0] : t, x0: x, moved: false };
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
   };
   const onMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const d = drag.current;
@@ -212,20 +212,42 @@ export function Timeline(p: Props) {
     cv.addEventListener("wheel", h, { passive: false });
     return () => cv.removeEventListener("wheel", h);
   }, []);
-  const overDrag = useRef(false);
-  const overSet = (x: number) => {
+  // overview: click to jump there, drag the box to scroll the timeline
+  const overDrag = useRef<{ x0: number; a0: number; moved: boolean; t: number; inBox: boolean } | null>(null);
+  const overDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+    const x = localX(e);
+    const t = clamp((x / W) * p.duration, 0, p.duration);
     const span = v1 - v0;
-    const c = (x / W) * p.duration;
-    const a = clamp(c - span / 2, 0, Math.max(0, p.duration - span));
+    const inBox = t >= v0 && t <= v1;
+    let a = v0;
+    if (!inBox) {
+      p.onSeek(t);
+      a = clamp(t - span / 2, 0, Math.max(0, p.duration - span));
+      p.onView([a, a + span]);
+    }
+    overDrag.current = { x0: x, a0: a, moved: false, t, inBox };
+  };
+  const overMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const d = overDrag.current;
+    if (!d) return;
+    const x = localX(e);
+    if (Math.abs(x - d.x0) > 3) d.moved = true;
+    if (!d.moved) return;
+    const span = v1 - v0;
+    const a = clamp(d.a0 + ((x - d.x0) / W) * p.duration, 0, Math.max(0, p.duration - span));
     p.onView([a, a + span]);
+  };
+  const overUp = () => {
+    const d = overDrag.current;
+    overDrag.current = null;
+    if (d && !d.moved && d.inBox) p.onSeek(d.t);
   };
 
   return (
     <div ref={wrap} className="timeline">
       <canvas ref={over} className="overview" aria-label="Whole lecture overview"
-        onPointerDown={(e) => { overDrag.current = true; e.currentTarget.setPointerCapture(e.pointerId); overSet(localX(e)); }}
-        onPointerMove={(e) => overDrag.current && overSet(localX(e))}
-        onPointerUp={() => { overDrag.current = false; }} />
+        onPointerDown={overDown} onPointerMove={overMove} onPointerUp={overUp} />
       <canvas ref={main} className="wave" aria-label="Timeline: drag to select, click to seek, Ctrl+scroll to zoom"
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />
     </div>
