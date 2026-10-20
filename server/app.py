@@ -65,6 +65,10 @@ class PreviewIn(BaseModel):
     captions: bool = True
 
 
+class CutPreviewIn(ShortIn):
+    pause: list[float]  # [start, end] of the removed pause, source seconds
+
+
 class StyleIn(BaseModel):
     name: str
     data: dict
@@ -242,6 +246,27 @@ def lecture_preview(lid: str, body: PreviewIn):
     return Response(jpg, media_type="image/jpeg")
 
 
+@app.get("/api/lectures/{lid}/speaker")
+def lecture_speaker(lid: str):
+    return media.speaker_track(lid)
+
+
+@app.post("/api/lectures/{lid}/preview-cut")
+def lecture_preview_cut(lid: str, body: CutPreviewIn):
+    """Exact render of ~2.5 s around one pause cut, to judge the transition."""
+    meta = store.get_lecture(lid)
+    a, b = body.pause
+    settings = body.model_dump()
+    settings["ranges"] = [[max(0.0, a - 1.2), b + 1.2]]
+    out = store.lecture_dir(lid) / "tmp" / f"cut-{store.new_id()}.mp4"
+    try:
+        make_short(store.source_path(lid), out, _options(meta, settings), log=lambda m: None)
+        data = out.read_bytes()
+    finally:
+        out.unlink(missing_ok=True)
+    return Response(data, media_type="video/mp4")
+
+
 # ---------- shorts ----------
 
 @app.get("/api/lectures/{lid}/shorts")
@@ -351,4 +376,5 @@ if WEB.exists():
         f = WEB / path
         if path and f.is_file() and WEB in f.resolve().parents:
             return FileResponse(f)
-        return FileResponse(WEB / "index.html")
+        # never cache the page itself, so a rebuilt frontend shows up on reload
+        return FileResponse(WEB / "index.html", headers={"Cache-Control": "no-cache"})

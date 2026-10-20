@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Range, type StyleData, type TextStyle } from "./api";
 import type { Ed } from "./Editor";
+import { QuickPlayer } from "./Quick";
 import { fmt, parseTime, useDebounced } from "./util";
 
 /* ---------- live 9:16 preview / rendered video ---------- */
@@ -10,14 +11,16 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
   // preview a moment that is actually in the short when the playhead is elsewhere
   const inShort = s?.ranges.some(([a, b]) => at >= a && at <= b);
   const t = !s?.ranges.length || inShort ? at : s.ranges[0][0] + 0.5;
-  const [tab, setTab] = useState<"look" | "rendered">(s?.rendered ? "rendered" : "look");
+  type Tab = "play" | "look" | "rendered";
+  const pick = (): Tab => (s?.rendered ? "rendered" : s?.ranges.length ? "play" : "look");
+  const [tab, setTab] = useState<Tab>(pick);
   const [img, setImg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const key = useDebounced(JSON.stringify({ t: Math.round(t * 4) / 4, style: s?.style, style_data: s?.style_data,
     title: s?.title, zoom: s?.zoom, captions: s?.captions }), 350);
 
   const sid = s?.id;
-  useEffect(() => { setTab(s?.rendered ? "rendered" : "look"); }, [sid, ed.renderedVersion, s?.rendered]);
+  useEffect(() => { setTab(pick()); }, [sid, ed.renderedVersion, s?.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (tab !== "look" || !sid) return;
     let live = true;
@@ -33,9 +36,11 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
   return (
     <div className="preview">
       <div className="seg small" role="tablist" aria-label="Preview">
-        <button type="button" role="tab" aria-selected={tab === "look"} onClick={() => setTab("look")}>Look at {fmt(t, 0)}</button>
+        <button type="button" role="tab" aria-selected={tab === "play"} disabled={!s?.ranges.length} onClick={() => setTab("play")}>Play cut</button>
+        <button type="button" role="tab" aria-selected={tab === "look"} onClick={() => setTab("look")}>Still at {fmt(t, 0)}</button>
         <button type="button" role="tab" aria-selected={tab === "rendered"} disabled={!s?.rendered} onClick={() => setTab("rendered")}>Rendered</button>
       </div>
+      {tab === "play" && s?.ranges.length ? <QuickPlayer ed={ed} width={width} /> : (
       <div className="phone-frame" style={{ width, height }}>
         {tab === "rendered" && s?.rendered ? (
           <video key={ed.renderedVersion} src={api.shortVideoUrl(ed.lecture.id, s.id, ed.renderedVersion)} controls playsInline />
@@ -44,7 +49,7 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
         ) : (
           <div className="ph">Loading preview…</div>
         )}
-      </div>
+      </div>)}
       {tab === "rendered" && s?.rendered && (
         <a className="btn block" href={api.shortVideoUrl(ed.lecture.id, s.id) + "?download=true"} download>Download MP4</a>
       )}
@@ -159,18 +164,18 @@ export function FramingPanel({ ed }: { ed: Ed }) {
 
 const PRESET_LABEL: Record<string, string> = { box: "Box", pill: "Pill", outline: "Outline", minimal: "Minimal" };
 
-function effectiveData(ed: Ed): StyleData {
+export function effectiveData(ed: Ed): StyleData {
   const s = ed.short!;
   if (s.style_data) return s.style_data;
   const custom = ed.styles?.custom[s.style];
   return custom ?? { base: s.style };
 }
 
-function effectiveCaption(ed: Ed): TextStyle | null {
+export function effectiveCaption(ed: Ed, part: "captions" | "title" = "captions"): TextStyle | null {
   if (!ed.styles) return null;
   const d = effectiveData(ed);
   const base = ed.styles.presets[d.base ?? "box"] ?? ed.styles.presets.box;
-  return { ...base.captions, ...(d.captions ?? {}) };
+  return { ...base[part], ...(d[part] ?? {}) };
 }
 
 export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {

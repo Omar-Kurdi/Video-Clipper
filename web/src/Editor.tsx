@@ -10,6 +10,9 @@ import { useDebounced, useInterval } from "./util";
 
 export type Mode = "studio" | "read";
 
+// lectures opened since this page loaded; a reload starts every editor fresh
+const opened = new Set<string>();
+
 export interface Ed {
   lecture: Lecture;
   shorts: Short[];
@@ -54,8 +57,11 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   const [time, setTime] = useState(0);
   const [renderedVersion, setRenderedVersion] = useState(Date.now());
   const dirty = useRef<Set<string>>(new Set());
+  // previous session's shorts, hidden after a reload until restored or discarded
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
 
-  const current = shorts.find((s) => s.id === shortId) ?? shorts[0] ?? null;
+  const visible = shorts.filter((s) => !hidden.has(s.id));
+  const current = visible.find((s) => s.id === shortId) ?? visible[0] ?? null;
 
   const loadTranscript = useCallback(() => api.transcript(lectureId).then(setTranscript).catch(() => setTranscript(null)), [lectureId]);
   const refreshStyles = useCallback(() => { api.styles().then(setStyles).catch(() => {}); }, []);
@@ -67,8 +73,23 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
     loadTranscript();
     refreshStyles();
     api.shorts(lectureId).then(async (list) => {
-      if (!list.length) list = [await api.createShort(lectureId, defaultSettings())];
+      const fresh = !opened.has(lectureId);
+      opened.add(lectureId);
+      const previous = fresh ? list.filter((s) => s.ranges.length || s.rendered) : [];
+      let draft = list.find((s) => !s.ranges.length && !s.rendered);
+      if (fresh && draft) draft = await api.updateShort(lectureId, draft.id, defaultSettings(draft.name));
+      if (!draft) {
+        draft = await api.createShort(lectureId, defaultSettings(`Short ${list.length + 1}`));
+        list = [...list, draft];
+      } else {
+        list = list.map((s) => (s.id === draft!.id ? draft! : s));
+      }
       setShorts(list);
+      if (previous.length) {
+        setHidden(new Set(previous.map((s) => s.id)));
+        history.replaceState(null, "", `#/l/${lectureId}/${mode}/${draft.id}`);
+        dispatchEvent(new HashChangeEvent("hashchange"));
+      }
     });
   }, [lectureId, loadTranscript, refreshStyles]);
 
@@ -129,7 +150,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
     if (!lecture) return null;
     const renderJob = current ? jobs.find((j) => j.short_id === current.id && (j.status === "queued" || j.status === "running")) ?? null : null;
     return {
-      lecture, shorts, short: current, update,
+      lecture, shorts: visible, short: current, update,
       addRange: (r) => {
         if (!current) return;
         const ranges = [...current.ranges, r].sort((a, b) => a[0] - b[0]);
@@ -160,15 +181,37 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       transcribeJob: jobs.find((j) => j.kind === "transcribe" && (j.status === "queued" || j.status === "running")) ?? null,
       renderedVersion, time, setTime,
     };
-  }, [lecture, shorts, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
+  }, [lecture, visible, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
     renderedVersion, time, lectureId, mode, pollJobs]);
 
   if (error && !lecture) return <div className="fatal"><p>{error}</p><a href="#/">Back to library</a></div>;
   if (!ed) return <div className="fatal"><p>Loading…</p></div>;
 
+  const prev = shorts.filter((s) => hidden.has(s.id));
+  const restore = () => {
+    const last = [...prev].sort((a, b) => b.created - a.created)[0];
+    setHidden(new Set());
+    if (last) go({ page: "editor", lecture: lectureId, mode, short: last.id });
+  };
+  const discard = async () => {
+    // drafts go; rendered shorts are finished work and stay
+    for (const s of prev) if (!s.rendered) await api.deleteShort(lectureId, s.id).catch(() => {});
+    setShorts((l) => l.filter((s) => !hidden.has(s.id) || s.rendered));
+    setHidden(new Set());
+  };
+
   return (
     <>
       {error && <div className="toast" role="alert" onClick={() => setError(null)}>{error} <button type="button" aria-label="Dismiss">✕</button></div>}
+      {prev.length > 0 && (
+        <div className="restore" role="status">
+          <span>Started fresh. Your last session had <b>{prev.length} short{prev.length > 1 ? "s" : ""}</b>
+            {" "}({prev.reduce((n, s) => n + s.ranges.length, 0)} clips{prev.some((s) => s.rendered) ? ", some rendered" : ""}).</span>
+          <button type="button" className="btn small primary" onClick={restore}>Restore previous session</button>
+          <button type="button" className="btn small" onClick={discard}
+            title="Deletes unrendered drafts; rendered shorts are kept">Discard</button>
+        </div>
+      )}
       {mode === "studio" ? <Studio ed={ed} /> : <Read ed={ed} />}
     </>
   );

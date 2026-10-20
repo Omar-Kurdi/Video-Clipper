@@ -16,6 +16,15 @@ export function Read({ ed }: { ed: Ed }) {
   const [hitIdx, setHitIdx] = useState(0);
 
   const words = tr?.words ?? [];
+  const wordSeg = useMemo(() => {
+    const m = new Int32Array(words.length);
+    tr?.segments.forEach((g, k) => { for (let i = g.w0; i < g.w1; i++) m[i] = k; });
+    return m;
+  }, [tr, words.length]);
+  const segOf = (i: number): [number, number] => {
+    const g = tr!.segments[wordSeg[i]];
+    return [g.w0, g.w1 - 1];
+  };
   const norm = useMemo(() => words.map((w) => normalize(w.w)), [words]);
 
   // ----- search -----
@@ -78,24 +87,40 @@ export function Read({ ed }: { ed: Ed }) {
   }, [nowIdx]);
 
   // ----- selection -> word range -----
-  const onMouseUp = () => {
+  // click = whole sentence, shift+click = extend, drag = everything touched (snapped to sentences)
+  const onMouseUp = (e: React.MouseEvent) => {
+    if (!tr) return;
     const sx = window.getSelection();
-    if (!sx || sx.isCollapsed || !sx.rangeCount) return;
     const idx = (n: Node | null) => {
       const el = (n instanceof HTMLElement ? n : n?.parentElement)?.closest("[data-i]");
       return el ? Number(el.getAttribute("data-i")) : null;
     };
-    const r = sx.getRangeAt(0);
-    let a = idx(r.startContainer), b = idx(r.endContainer);
-    if (a == null || b == null) {
-      // selection started/ended on a timestamp or pause pill: use the words it covers
+    if (sx && !sx.isCollapsed && sx.rangeCount) {
       const inside = [...(article.current?.querySelectorAll("[data-i]") ?? [])].filter((el) => sx.containsNode(el, true));
       if (!inside.length) return;
-      a = Number(inside[0].getAttribute("data-i"));
-      b = Number(inside[inside.length - 1].getAttribute("data-i"));
+      const a = Number(inside[0].getAttribute("data-i"));
+      const b = Number(inside[inside.length - 1].getAttribute("data-i"));
+      setSel([segOf(Math.min(a, b))[0], segOf(Math.max(a, b))[1]]);
+      sx.removeAllRanges();
+      return;
     }
-    setSel([Math.min(a, b), Math.max(a, b)]);
+    const target = e.target as HTMLElement;
+    if (target.closest(".ts")) return;
+    let i = idx(target);
+    if (i == null) {
+      const para = target.closest("[data-seg]");
+      if (!para) return;
+      i = tr.segments[Number(para.getAttribute("data-seg"))].w0;
+    }
+    const [a, b] = segOf(i);
+    if (e.shiftKey && sel) setSel([Math.min(sel[0], a), Math.max(sel[1], b)]);
+    else { setSel([a, b]); seek(words[a].s); }
   };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => { if (e.key === "Escape") setSel(null); };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, []);
   const selRange: Range | null = sel ? [words[sel[0]].s, words[sel[1]].e] : null;
   const clearSel = () => { setSel(null); window.getSelection()?.removeAllRanges(); };
 
@@ -115,18 +140,19 @@ export function Read({ ed }: { ed: Ed }) {
             ? <span key={`g${i}`} className={`pause ${inShort(w.s) ? "cut" : ""}`} dir="ltr">{gap.toFixed(1)}s</span>
             : " ");
         }
-        const cls = [inShort((w.s + w.e) / 2) ? "in" : "", hitSet.has(i) ? "hit" : ""].join(" ").trim();
+        const picked = sel != null && i >= sel[0] && i <= sel[1];
+        const cls = [inShort((w.s + w.e) / 2) ? "in" : "", hitSet.has(i) ? "hit" : "", picked ? "picked" : ""].join(" ").trim();
         parts.push(<span key={i} data-i={i} className={cls || undefined}>{w.w}</span>);
       }
       return (
-        <div className="para" key={k}>
-          <button type="button" className="ts" dir="ltr" onClick={() => seek(seg.s)} aria-label={`Play from ${fmt(seg.s)}`}>{fmt(seg.s)}</button>
+        <div className={`para ${sel && seg.w0 >= sel[0] && seg.w1 - 1 <= sel[1] ? "picked" : ""}`} key={k} data-seg={k}>
+          <button type="button" className="ts" dir="ltr" onClick={() => { seek(seg.s); video.current?.play(); }} aria-label={`Play from ${fmt(seg.s)}`}>{fmt(seg.s)}</button>
           <p>{parts}</p>
         </div>
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tr, JSON.stringify(ranges), minGap, hitSet]);
+  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel]);
 
   const lang = tr?.language ?? ed.lecture.language ?? "ar";
   const rtl = ["ar", "fa", "ur", "he"].includes(lang);
@@ -176,7 +202,7 @@ export function Read({ ed }: { ed: Ed }) {
                 </label>
                 <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx - 1)} aria-label="Previous match">↑</button>
                 <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx + 1)} aria-label="Next match">↓</button>
-                <span className="muted small">Select text to make a clip · click a time to play</span>
+                <span className="howto"><span><b>Click</b> a sentence to select it</span><span><b>Shift+click</b> another to extend</span><span><b>Drag</b> across lines</span><span><b>Esc</b> clears</span></span>
               </div>
               <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""}`} onMouseUp={onMouseUp}>
                 {body}

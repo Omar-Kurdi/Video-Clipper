@@ -138,6 +138,12 @@ export const api = {
     if (!r.ok) throw new Error("preview failed");
     return URL.createObjectURL(await r.blob());
   },
+  speaker: (id: string) => req<[number, number, number][]>(`/api/lectures/${id}/speaker`),
+  previewCut: async (id: string, s: ShortSettings, pause: Range) => {
+    const r = await fetch(`/api/lectures/${id}/preview-cut`, json({ ...s, pause }));
+    if (!r.ok) throw new Error("cut preview failed");
+    return URL.createObjectURL(await r.blob());
+  },
   shorts: (id: string) => req<Short[]>(`/api/lectures/${id}/shorts`),
   createShort: (id: string, s: ShortSettings) => req<Short>(`/api/lectures/${id}/shorts`, json(s)),
   updateShort: (id: string, sid: string, s: ShortSettings) => req<Short>(`/api/lectures/${id}/shorts/${sid}`, json(s, "PUT")),

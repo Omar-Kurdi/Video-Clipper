@@ -2,6 +2,7 @@
 import json
 import re
 import subprocess
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -112,8 +113,58 @@ def analyze(lid: str, report) -> dict:
                                                  "peaks": _waveform(src, info["duration"])}))
     report(progress=0.7, stage="finding pauses")
     (d / "speech.json").write_text(json.dumps(_speech(src)))
+    report(progress=0.9, stage="locating the speaker")
+    speaker_track(lid)
     store.update_lecture(lid, status="ready")
     return info
+
+
+def speaker_track(lid: str) -> list[list[float]]:
+    """Coarse speaker position for in-browser previews: the main face on every
+    keyframe, as [time, x, y] with x/y normalised to the frame. Cached."""
+    cache = store.lecture_dir(lid) / "speaker.json"
+    if cache.exists():
+        return json.loads(cache.read_text())
+    meta = store.get_lecture(lid)
+    src = store.source_path(lid)
+    w = DETECT_WIDTH
+    h = round(meta["height"] * w / meta["width"]) // 2 * 2
+    proc = subprocess.Popen(
+        ["ffmpeg", "-v", "info", "-skip_frame", "nokey", "-i", str(src), "-an",
+         "-vf", f"scale={w}:{h},showinfo", "-fps_mode", "passthrough",
+         "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    times: list[float] = []
+
+    def read_err():
+        for line in proc.stderr:
+            m = re.search(rb"pts_time:([\d.]+)", line)
+            if m:
+                times.append(float(m.group(1)))
+    t_err = threading.Thread(target=read_err, daemon=True)
+    t_err.start()
+    det = _detector(w, h)
+    out, prev, k = [], None, 0
+    size = w * h * 3
+    while True:
+        buf = proc.stdout.read(size)
+        if len(buf) < size:
+            break
+        frame = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
+        _, faces = det.detect(frame)
+        if faces is not None and len(faces):
+            if prev is None:
+                f = max(faces, key=lambda f: f[2] * f[3] * f[14])
+            else:
+                f = min(faces, key=lambda f: abs(f[0] + f[2] / 2 - prev) - f[2])
+            prev = f[0] + f[2] / 2
+            out.append((k, round(float(prev / w), 4), round(float((f[1] + f[3] / 2) / h), 4)))
+        k += 1
+    proc.wait()
+    t_err.join(timeout=5)
+    track = [[round(times[i], 3), x, y] for i, x, y in out if i < len(times)]
+    cache.write_text(json.dumps(track))
+    return track
 
 
 def playback_path(lid: str) -> Path:
