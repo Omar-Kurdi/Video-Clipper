@@ -1,0 +1,16 @@
+{
+  "base": "pill",
+  "captions": {
+    "size": 70,
+    "color": "#FFFFFF",
+    "highlight": "#7CF29C",
+    "box_color": "#0B3D2E",
+    "box_opacity": 0.8,
+    "radius": 40,
+    "y": 0.60
+  },
+  "title": {
+    "color": "#0B3D2E",
+    "box_color": "#7CF29C"
+  }
+}

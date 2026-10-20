@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.venv/
+# media and app data stay local
+data/
+lectures/
+out/
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.words.json
+*.transcript.txt
+# downloaded on first run
+models/*.onnx
+# frontend
+web/node_modules/
+web/dist/
+.claude/
