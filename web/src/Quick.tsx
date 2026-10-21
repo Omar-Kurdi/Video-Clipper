@@ -12,12 +12,20 @@ import { clamp, fmt } from "./util";
  * to see the real transition).
  */
 
-type Track = [number, number, number, number?][];
+export type Track = [number, number, number, number?, (number | null)?][];
 const tracks = new Map<string, Promise<Track>>();
 export const trackFor = (id: string, fresh = false) => {
   if (fresh || !tracks.has(id)) tracks.set(id, api.speaker(id).catch(() => []));
   return tracks.get(id)!;
 };
+
+/** The camera's own zoom at time t (nearest analysed sample), if it has one. */
+export function zoomAt(track: Track, t: number): number | null {
+  if (!track.length) return null;
+  let best = track[0];
+  for (const p of track) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+  return best[4] ?? null;
+}
 
 /** Framing at time t: within one camera interpolate, across a camera change hold. */
 export function at(track: Track, t: number): [number, number] {
@@ -97,11 +105,13 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
 
   const place = (v: HTMLVideoElement | null) => {
     if (!v) return;
-    const scale = (height * s.zoom) / H;
+    const z = zoomAt(track, v.currentTime) ?? s.zoom;
+    const scale = (height * z) / H;
     const vw = W * scale, vh = H * scale;
     const [x, y] = at(track, v.currentTime);
     const left = clamp(width / 2 - x * vw, width - vw, 0);
-    const top = clamp(height * 0.36 - y * vh, height - vh, 0);
+    // zoomed out (< 1x): the picture is shorter than the phone screen, centre it
+    const top = vh < height ? (height - vh) / 2 : clamp(height * 0.36 - y * vh, height - vh, 0);
     v.style.width = `${vw}px`;
     v.style.height = `${vh}px`;
     v.style.transform = `translate(${left}px, ${top}px)`;
@@ -174,6 +184,29 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
     return () => cancelAnimationFrame(raf);
   }, [playing, segs, fade]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Jump to a time in the short (output time), mid-play or paused. */
+  const seekOut = (target: number) => {
+    const [a, b] = vids();
+    if (!a || !b || !segs.length) return;
+    target = clamp(target, 0, Math.max(0, total - 0.05));
+    let k = 0, o = 0;
+    while (k < segs.length - 1 && target >= o + (segs[k][1] - segs[k][0] - fade)) {
+      o += segs[k][1] - segs[k][0] - fade;
+      k += 1;
+    }
+    const wasPlaying = playing;
+    a.pause(); b.pause();
+    run.current = { k, active: 0, fadeStart: null, started: true };
+    a.style.opacity = "1"; b.style.opacity = "0";
+    a.volume = 1;
+    a.currentTime = segs[k][0] + (target - o);
+    if (segs[k + 1]) b.currentTime = segs[k + 1][0];
+    setCut(Math.max(0, k - 1));
+    setOutT(target);
+    setSrcT(a.currentTime);
+    if (wasPlaying) a.play().catch(() => {});
+  };
+
   const toggle = () => {
     if (playing) { vids().forEach((v) => v.pause()); setPlaying(false); return; }
     if (!run.current.started) { reset(); run.current.started = true; }
@@ -226,10 +259,14 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
           </div>
         )}
       </div>
+      <input className="q-scrub" type="range" min={0} max={Math.max(0.1, total)} step={0.04} value={Math.min(outT, total)}
+        aria-label="Position in the short" onChange={(e) => seekOut(+e.target.value)} />
       <div className="q-bar">
+        <button type="button" className="icon" aria-label="Restart" onClick={reset}>⏮</button>
+        <button type="button" className="btn small" aria-label="Back 5 seconds" onClick={() => seekOut(outT - 5)}>−5s</button>
         <button type="button" className="btn small" onClick={toggle}>{playing ? "Pause" : run.current.started ? "Resume" : "Play cut"}</button>
+        <button type="button" className="btn small" aria-label="Forward 5 seconds" onClick={() => seekOut(outT + 5)}>+5s</button>
         <span className="tc small">{fmt(outT, 1)} / {fmt(total, 1)}</span>
-        <button type="button" className="icon" aria-label="Restart" onClick={reset}>↺</button>
       </div>
       {segs.length > 1 && (
         <div className="q-exact-row">

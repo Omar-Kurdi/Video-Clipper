@@ -9,8 +9,9 @@ export type Route =
   | { page: "editor"; lecture: string; mode: Mode; short?: string };
 
 function parse(hash: string): Route {
-  const m = hash.match(/^#\/l\/([a-f0-9]{12})\/(studio|read)(?:\/([a-f0-9]{12}))?/);
-  if (m) return { page: "editor", lecture: m[1], mode: m[2] as Mode, short: m[3] };
+  // studio/read links from before the editors were merged still work
+  const m = hash.match(/^#\/l\/([a-f0-9]{12})\/(?:studio|read|edit)(?:\/([a-f0-9]{12}))?/);
+  if (m) return { page: "editor", lecture: m[1], mode: "edit", short: m[2] };
   return { page: "landing" };
 }
 

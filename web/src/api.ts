@@ -89,7 +89,7 @@ export interface Word { w: string; s: number; e: number }
 export interface Transcript {
   language: string;
   words: Word[];
-  segments: { s: number; e: number; w0: number; w1: number }[];
+  segments: { s: number; e: number; w0: number; w1: number; edited?: boolean }[];
 }
 
 export interface Camera {
@@ -99,6 +99,7 @@ export interface Camera {
   has_speaker: boolean;
   auto: { x: number; y: number; w: number } | null;
   manual: { x: number; y: number } | null;
+  zoom?: number | null;
 }
 export interface Cameras { status: "ready" | "analyzing"; has_lecturer?: boolean; cameras: Camera[]; job?: Job }
 
@@ -141,6 +142,8 @@ export const api = {
   waveform: (id: string) => req<{ rate: number; peaks: number[] }>(`/api/lectures/${id}/waveform`),
   speech: (id: string) => req<Range[]>(`/api/lectures/${id}/speech`),
   transcript: (id: string) => req<Transcript>(`/api/lectures/${id}/transcript`),
+  editSegment: (id: string, k: number, text: string | null) =>
+    req<Transcript>(`/api/lectures/${id}/transcript/segments/${k}`, json({ text }, "PUT")),
   transcribe: (id: string) => req<Job>(`/api/lectures/${id}/transcribe`, { method: "POST" }),
   estimate: (id: string, s: ShortSettings) => req<Estimate>(`/api/lectures/${id}/estimate`, json(s)),
   preview: async (id: string, body: object) => {
@@ -148,8 +151,10 @@ export const api = {
     if (!r.ok) throw new Error("preview failed");
     return URL.createObjectURL(await r.blob());
   },
-  speaker: (id: string) => req<[number, number, number, number?][]>(`/api/lectures/${id}/speaker`),
+  speaker: (id: string) => req<[number, number, number, number?, (number | null)?][]>(`/api/lectures/${id}/speaker`),
   cameras: (id: string) => req<Cameras>(`/api/lectures/${id}/cameras`),
+  setCameraZoom: (id: string, cid: number, zoom: number | null) =>
+    req<Camera>(`/api/lectures/${id}/cameras/${cid}`, json({ zoom }, "PUT")),
   setFraming: (id: string, cid: number, manual: { x: number; y: number } | null) =>
     req<Camera>(`/api/lectures/${id}/cameras/${cid}`, json({ manual }, "PUT")),
   cameraThumb: (id: string, cid: number) => `/api/lectures/${id}/cameras/${cid}/thumb`,

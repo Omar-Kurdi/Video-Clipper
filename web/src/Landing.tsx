@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Lecture } from "./api";
 import { go } from "./main";
-import type { Mode } from "./Editor";
-import { fmt, storage, store, useInterval } from "./util";
+import { fmt, useInterval } from "./util";
 
 type Source = "link" | "file" | "path";
 
@@ -24,19 +23,12 @@ export function Landing() {
   const [lang, setLang] = useState("ar");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>(() => storage<Mode>("mode", "studio"));
-  const [remember, setRemember] = useState(() => storage("rememberMode", false));
   const libRef = useRef<HTMLElement>(null);
 
   const refresh = () => api.lectures().then(setLectures).catch(() => {});
   useEffect(() => { refresh(); }, []);
   const active = lectures.some((l) => l.job || l.status === "importing" || l.status === "analyzing");
   useInterval(refresh, active ? 1500 : 10000);
-
-  const pick = (m: Mode) => {
-    setMode(m);
-    if (remember) store("mode", m);
-  };
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -58,11 +50,10 @@ export function Landing() {
     }
   }
 
-  const open = (l: Lecture, m: Mode = mode) => go({ page: "editor", lecture: l.id, mode: m });
+  const open = (l: Lecture) => go({ page: "editor", lecture: l.id, mode: "edit" });
   const latestReady = lectures.find((l) => l.status === "ready");
-  const openMode = (m: Mode) => {
-    pick(m);
-    if (latestReady) open(latestReady, m);
+  const openEditor = () => {
+    if (latestReady) open(latestReady);
     else document.getElementById("src")?.focus();
   };
 
@@ -74,7 +65,7 @@ export function Landing() {
           Lecture Shorts
         </a>
         <nav aria-label="Main" className="l-nav">
-          <a href="#modes" onClick={(e) => { e.preventDefault(); document.getElementById("modes")?.scrollIntoView({ behavior: "smooth" }); }}>Two ways to edit</a>
+          <a href="#modes" onClick={(e) => { e.preventDefault(); document.getElementById("modes")?.scrollIntoView({ behavior: "smooth" }); }}>The editor</a>
           <a href="#how" onClick={(e) => { e.preventDefault(); document.getElementById("how")?.scrollIntoView({ behavior: "smooth" }); }}>How it works</a>
         </nav>
         <span className="grow" />
@@ -125,21 +116,20 @@ export function Landing() {
       </section>
 
       <section id="modes" className="modes" aria-labelledby="modes-h">
-        <h2 id="modes-h">How do you like to find the good parts?</h2>
-        <p className="sub">Pick a way to work. Both edit the same short, so you can switch at any time.</p>
+        <h2 id="modes-h">Watch it or read it, in one place</h2>
+        <p className="sub">The video with its timeline and the transcript sit side by side, and both edit the same short.</p>
         <div className="mode-grid">
-          <article className={`mode-card dark ${mode === "studio" ? "picked" : ""}`}>
+          <article className="mode-card dark">
             <div className="mode-art studio-art" aria-hidden="true">
               <div className="crop" />
               <div className="mini-wave">{Array.from({ length: 70 }, (_, i) => <span key={i} style={{ height: `${i % 11 < 2 ? 8 : 30 + ((i * 37) % 60)}%` }} className={i > 12 && i < 44 ? "sel" : ""} />)}</div>
             </div>
             <span className="eyebrow gold">WATCH &amp; MARK</span>
-            <h3>Studio</h3>
-            <p>Scrub the video, press I and O to mark a moment, and fine-tune on the waveform. Pauses and the tracking crop are visible on the timeline.</p>
-            <ul><li>No transcript needed</li><li>Frame-accurate in and out points</li><li>Best when you already know the lecture</li></ul>
-            <button type="button" className="btn gold" onClick={() => openMode("studio")}>Open Studio →</button>
+            <h3>Timeline</h3>
+            <p>Scrub the video, press I and O to mark a moment, and fine-tune on the waveform. Pauses and the speaker framing are visible as you go.</p>
+            <ul><li>Works without a transcript</li><li>Frame-accurate in and out points</li><li>Drag the frame to set each camera</li></ul>
           </article>
-          <article className={`mode-card light ${mode === "read" ? "picked" : ""}`}>
+          <article className="mode-card light">
             <div className="mode-art read-art" lang="ar" dir="rtl" aria-hidden="true">
               <p className="dim">لما بعث ستين أو ثمانين راكبا من قريش</p>
               <p className="sel">إلا أن سعدا رمى ذلك اليوم <mark>بسهم</mark>، فكان أول من رمى <mark>بسهم</mark> في سبيل الله <span className="pause">1.2s</span></p>
@@ -147,15 +137,11 @@ export function Landing() {
             </div>
             <span className="eyebrow green">READ &amp; SELECT</span>
             <h3>Transcript</h3>
-            <p>Read the lecture like a document. Search for a word, select the sentences you want, and the short is cut to match.</p>
-            <ul><li>Search a whole hour in seconds</li><li>Clips start and end on whole sentences</li><li>Best for long lectures you haven't watched</li></ul>
-            <button type="button" className="btn green" onClick={() => openMode("read")}>Open Transcript →</button>
+            <p>Read the lecture like a document. Search a word, click the sentences you want, and fix any misheard text right there.</p>
+            <ul><li>Search a whole hour in seconds</li><li>Clips start and end on whole sentences</li><li>Corrections flow into the captions</li></ul>
           </article>
         </div>
-        <label className="remember">
-          <input type="checkbox" checked={remember} onChange={(e) => { setRemember(e.target.checked); store("rememberMode", e.target.checked); if (e.target.checked) store("mode", mode); }} />
-          Remember my choice for new lectures
-        </label>
+        <button type="button" className="btn dark open-editor" onClick={openEditor}>Open the editor →</button>
       </section>
 
       <section ref={libRef} className="library" aria-labelledby="lib-h">
@@ -175,8 +161,7 @@ export function Landing() {
                   {l.job && <progress max={1} value={l.job.progress || undefined} aria-label="Progress" />}
                 </div>
                 <div className="lib-actions">
-                  <button type="button" className="btn" disabled={l.status !== "ready"} onClick={() => open(l, "studio")}>Studio</button>
-                  <button type="button" className="btn" disabled={l.status !== "ready"} onClick={() => open(l, "read")}>Transcript</button>
+                  <button type="button" className="btn" disabled={l.status !== "ready"} onClick={() => open(l)}>Open</button>
                   <button type="button" className="btn ghost" aria-label={`Delete ${l.title}`}
                     onClick={async () => { if (confirm(`Delete “${l.title}” and its shorts?`)) { await api.deleteLecture(l.id); refresh(); } }}>✕</button>
                 </div>

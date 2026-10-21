@@ -126,8 +126,9 @@ export function CutsPanel({ ed }: { ed: Ed }) {
     <div className="panel">
       <div className="row"><label htmlFor="gap">Cut pauses longer than</label><span className="val">{s.min_gap.toFixed(2)} s</span></div>
       <input id="gap" type="range" min={0.2} max={1.5} step={0.05} value={s.min_gap} onChange={(e) => ed.update({ min_gap: +e.target.value })} />
+      <p className="help">When a pause is cut out, the moment before it and the moment after it are joined. How they're joined:</p>
       <fieldset>
-        <legend>Transition at each cut</legend>
+        <legend className="sr">Transition at each cut</legend>
         <div className="seg fill">
           {(["morph", "fade", "cut"] as const).map((t) => (
             <button key={t} type="button" aria-pressed={s.transition === t} onClick={() => ed.update({ transition: t })}>
@@ -136,9 +137,20 @@ export function CutsPanel({ ed }: { ed: Ed }) {
           ))}
         </div>
       </fieldset>
+      <p className="help">
+        {s.transition === "morph" && "Morph: the speaker's head and hands are smoothly moved from one position to the other, so the join looks like natural movement instead of a jump."}
+        {s.transition === "fade" && "Fade: the two moments blend into each other (a quick dissolve)."}
+        {s.transition === "cut" && "Jump cut: no blending; the picture switches instantly (the classic YouTube jump cut)."}
+      </p>
       {s.transition !== "cut" && <>
-        <div className="row"><label htmlFor="len">Length</label><span className="val">{s.transition_frames} frames · {ms} ms</span></div>
+        <div className="row"><label htmlFor="len">Blend length</label><span className="val">{s.transition_frames} frames · {ms} ms</span></div>
         <input id="len" type="range" min={2} max={10} step={1} value={s.transition_frames} onChange={(e) => ed.update({ transition_frames: +e.target.value })} />
+        <div className="blend-viz" aria-hidden="true">
+          <span className="a">before</span>
+          <span className="mix" style={{ flexBasis: `${s.transition_frames * 9}%` }}>{s.transition === "morph" ? "morph" : "blend"}</span>
+          <span className="b">after</span>
+        </div>
+        <p className="help">How long the join takes. Short (2–3 frames) is quick and almost invisible, close to a jump cut. Longer (6–10) is softer, but you may notice the blend. 4 is a good start; check one with "Render this cut exactly" in the preview.</p>
       </>}
       <p className="muted small">Camera changes are always clean hard cuts, with the crop switching on the exact frame.</p>
     </div>
@@ -154,7 +166,10 @@ export function cropWidth(ed: Ed, zoom: number) {
 
 /** Thumbnail of one camera with its 9:16 frame; drag the frame to set it by hand. */
 function CameraCard({ ed, cam, index }: { ed: Ed; cam: Camera; index: number }) {
-  const cw = cropWidth(ed, ed.short?.zoom ?? 1);
+  const shortZoom = ed.short?.zoom ?? 1;
+  const [zoomDraft, setZoomDraft] = useState<number | null>(null);
+  const zoom = zoomDraft ?? cam.zoom ?? shortZoom;
+  const cw = Math.min(1, cropWidth(ed, zoom));
   const current = cam.manual?.x ?? cam.auto?.x ?? 0.5;
   const [drag, setDragState] = useState<number | null>(null);
   const dragRef = useRef<number | null>(null);
@@ -192,7 +207,16 @@ function CameraCard({ ed, cam, index }: { ed: Ed; cam: Camera; index: number }) 
         <b>Camera {index + 1}</b>
         <span className="muted small">{Math.round(cam.share * 100)}% of the lecture · {cam.has_speaker ? "lecturer found" : "no lecturer (audience)"}</span>
         <span className="small">{cam.manual ? "Manual framing" : cam.has_speaker ? "Auto: locked on the lecturer" : "Auto: centred"}</span>
-        {cam.manual && <button type="button" className="link small" onClick={() => ed.setFraming(cam.id, null)}>Reset to auto</button>}
+        {cam.manual && <button type="button" className="link small" onClick={() => ed.setFraming(cam.id, null)}>Reset position to auto</button>}
+        <div className="row cam-zoom">
+          <label htmlFor={`camzoom${cam.id}`}>Zoom for this camera</label>
+          <span className="val">{cam.zoom == null && zoomDraft == null ? `same as short (${shortZoom.toFixed(2)}×)` : `${zoom.toFixed(2)}×`}</span>
+        </div>
+        <input id={`camzoom${cam.id}`} type="range" min={0.6} max={1.6} step={0.05} value={zoom}
+          onChange={(e) => setZoomDraft(+e.target.value)}
+          onPointerUp={() => { if (zoomDraft != null) { ed.setCameraZoom(cam.id, zoomDraft); setZoomDraft(null); } }}
+          onKeyUp={() => { if (zoomDraft != null) { ed.setCameraZoom(cam.id, zoomDraft); setZoomDraft(null); } }} />
+        {cam.zoom != null && <button type="button" className="link small" onClick={() => ed.setCameraZoom(cam.id, null)}>Use the short's zoom</button>}
       </div>
     </li>
   );
@@ -205,9 +229,20 @@ export function FramingPanel({ ed }: { ed: Ed }) {
   const minor = (ed.cameras?.cameras.length ?? 0) - cams.length;
   return (
     <div className="panel">
-      <div className="row"><label htmlFor="zoom">Zoom</label><span className="val">{s.zoom.toFixed(2)}×</span></div>
-      <input id="zoom" type="range" min={1} max={1.6} step={0.05} value={s.zoom} onChange={(e) => ed.update({ zoom: +e.target.value })} />
-      <label className="check"><input type="checkbox" checked={s.grade} onChange={(e) => ed.update({ grade: e.target.checked })} />Colour grade (contrast, sharpen, vignette)</label>
+      <div className="row"><label htmlFor="zoom">Zoom (all cameras)</label><span className="val">{s.zoom < 1 ? "wider " : s.zoom > 1 ? "closer " : ""}{s.zoom.toFixed(2)}×</span></div>
+      <input id="zoom" type="range" min={0.6} max={1.6} step={0.05} value={s.zoom} onChange={(e) => ed.update({ zoom: +e.target.value })}
+        list="zoom-marks" />
+      <datalist id="zoom-marks"><option value="1" /></datalist>
+      <div className="range-ends small muted"><span>← wider (zoom out)</span><span>closer (zoom in) →</span></div>
+      <p className="help">
+        {s.zoom < 1
+          ? "Zoomed out: more of the scene fits, so the speaker moving left or right is less noticeable. The video no longer fills the phone screen top to bottom; the space above and below is filled with a blurred copy of the picture."
+          : s.zoom > 1
+            ? "Zoomed in: a tighter shot of the speaker. Very high zoom can look soft, because the picture is enlarged."
+            : "1× uses the full height of the video. Slide left to zoom out, right to zoom in."}
+      </p>
+      <label className="check"><input type="checkbox" checked={s.grade} onChange={(e) => ed.update({ grade: e.target.checked })} />Colour grade</label>
+      <p className="help">Gives a punchier look: a little more contrast and colour, slight sharpening, and gently darkened corners. Leave it off to keep the original colours. It only affects the rendered video, not the preview.</p>
       <div className="cams-head"><b>Cameras</b>
         <span className="muted small">The lecturer is recognised in every shot and held in place. Drag a frame to set a camera by hand; it applies to every shot from that camera.</span>
       </div>

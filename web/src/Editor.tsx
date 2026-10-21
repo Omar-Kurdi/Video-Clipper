@@ -4,11 +4,10 @@ import {
   type ShortSettings, type Styles, type Transcript,
 } from "./api";
 import { go } from "./main";
-import { Studio } from "./Studio";
-import { Read } from "./Read";
+import { Workspace } from "./Workspace";
 import { useDebounced, useInterval } from "./util";
 
-export type Mode = "studio" | "read";
+export type Mode = "edit";
 
 // lectures opened since this page loaded; a reload starts every editor fresh
 const opened = new Set<string>();
@@ -37,6 +36,8 @@ export interface Ed {
   cameras: Cameras | null;
   framingVersion: number;
   setFraming: (cid: number, manual: { x: number; y: number } | null) => Promise<void>;
+  setCameraZoom: (cid: number, zoom: number | null) => Promise<void>;
+  editSegment: (k: number, text: string | null) => Promise<void>;
   time: number;
   setTime: (t: number) => void;
 }
@@ -188,11 +189,21 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       transcribe: async () => { await api.transcribe(lectureId).catch((e) => setError(e.message)); pollJobs(); },
       transcribeJob: jobs.find((j) => j.kind === "transcribe" && (j.status === "queued" || j.status === "running")) ?? null,
       renderedVersion, time, setTime, cameras, framingVersion,
+      setCameraZoom: async (cid, zoom) => {
+        const cam = await api.setCameraZoom(lectureId, cid, zoom).catch((e) => { setError(e.message); return null; });
+        if (!cam) return;
+        setCameras((c) => c && { ...c, cameras: c.cameras.map((x) => (x.id === cid ? cam : x)) });
+        setFramingVersion((v) => v + 1);
+      },
       setFraming: async (cid, manual) => {
         const cam = await api.setFraming(lectureId, cid, manual).catch((e) => { setError(e.message); return null; });
         if (!cam) return;
         setCameras((c) => c && { ...c, cameras: c.cameras.map((x) => (x.id === cid ? cam : x)) });
         setFramingVersion((v) => v + 1);
+      },
+      editSegment: async (k, text) => {
+        const t = await api.editSegment(lectureId, k, text).catch((e) => { setError(e.message); return null; });
+        if (t) setTranscript(t);
       },
     };
   }, [lecture, visible, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
@@ -226,13 +237,13 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
             title="Deletes unrendered drafts; rendered shorts are kept">Discard</button>
         </div>
       )}
-      {mode === "studio" ? <Studio ed={ed} /> : <Read ed={ed} />}
+      <Workspace ed={ed} />
     </>
   );
 }
 
-/** Shared top bar: brand, lecture, mode switch, short picker, render. */
-export function TopBar({ ed, mode }: { ed: Ed; mode: Mode }) {
+/** Top bar: brand, lecture, short picker, render. */
+export function TopBar({ ed }: { ed: Ed }) {
   const { lecture, shorts, short } = ed;
   const failed = ed.jobs.find((j) => j.short_id === short?.id && j.status === "error" && j.kind === "render");
   return (
@@ -242,10 +253,6 @@ export function TopBar({ ed, mode }: { ed: Ed; mode: Mode }) {
         Lecture Shorts
       </a>
       <span className="crumb" dir="auto">{lecture.title}</span>
-      <div className="seg" role="group" aria-label="Editing mode">
-        <a href={`#/l/${lecture.id}/studio${short ? `/${short.id}` : ""}`} aria-current={mode === "studio" ? "page" : undefined}>Studio</a>
-        <a href={`#/l/${lecture.id}/read${short ? `/${short.id}` : ""}`} aria-current={mode === "read" ? "page" : undefined}>Transcript</a>
-      </div>
       <span className="grow" />
       <label className="short-pick">
         <span className="sr">Current short</span>
@@ -254,8 +261,10 @@ export function TopBar({ ed, mode }: { ed: Ed; mode: Mode }) {
           <option value="__new">+ New short</option>
         </select>
       </label>
-      {failed && <span className="bad" title={failed.message}>Last render failed</span>}
-      <RenderButton ed={ed} />
+      {short && shorts.length > 1 && (
+        <button type="button" className="btn small ghost" onClick={() => { if (confirm(`Delete ${short.name}?`)) ed.removeShort(short.id); }}>Delete short</button>
+      )}
+      {failed && <span className="bad" title={failed.message}>Last render failed: {failed.message}</span>}
     </header>
   );
 }
@@ -271,7 +280,13 @@ export function RenderButton({ ed, block }: { ed: Ed; block?: boolean }) {
     );
   }
   return (
-    <button type="button" className={`btn primary ${block ? "block" : ""}`} disabled={!ed.short?.ranges.length} onClick={ed.render}>
+    <button type="button" className={`btn primary ${block ? "block" : ""}`} disabled={!ed.short?.ranges.length}
+      onClick={() => {
+        const dur = ed.estimate?.duration ?? 0;
+        if (dur > 180 && !confirm(`This short will be ${Math.round(dur / 60)} minutes long. Shorts are usually under 3 minutes, `
+          + `and long ones take a while to render (roughly a third of their length). Render anyway?`)) return;
+        ed.render();
+      }}>
       Render {ed.short?.name ?? "short"}
     </button>
   );

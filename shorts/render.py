@@ -4,13 +4,35 @@ from fractions import Fraction
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from .captions import Overlay
 from .reframe import CropPath
 from .transitions import with_transitions
+from .util import encode_args
 
 OUT_W, OUT_H = 1080, 1920
 GRADE = "eq=contrast=1.08:saturation=1.15,unsharp=5:5:0.6,vignette=PI/5"
+
+
+def compose(crop: np.ndarray) -> np.ndarray:
+    """Crop -> 1080x1920. A crop wider than 9:16 (zoomed out) is fitted to the
+    width and the space above and below is filled with a blurred, dimmed copy."""
+    h, w = crop.shape[:2]
+    if w * OUT_H <= h * OUT_W + h:  # 9:16 (or narrower): fill the frame
+        return cv2.resize(crop, (OUT_W, OUT_H), interpolation=cv2.INTER_LANCZOS4)
+    fh = round(OUT_W * h / w) // 2 * 2
+    fg = cv2.resize(crop, (OUT_W, fh), interpolation=cv2.INTER_LANCZOS4)
+    # background: cover-scale a tiny copy, blur, scale up (cheap)
+    sw = max(1, round(h * 9 / 16))
+    x0 = (w - sw) // 2
+    small = cv2.resize(crop[:, x0:x0 + sw], (54, 96), interpolation=cv2.INTER_AREA)
+    small = cv2.GaussianBlur(small, (0, 0), 6)
+    bg = cv2.resize(small, (OUT_W, OUT_H), interpolation=cv2.INTER_LINEAR)
+    bg = (bg * 0.55).astype(np.uint8)
+    top = (OUT_H - fh) // 2
+    bg[top:top + fh] = fg
+    return bg
 
 
 def _frames(cap: cv2.VideoCapture):
@@ -28,8 +50,7 @@ def render_vertical(cut: Path, path: CropPath, fps: Fraction, windows: dict[int,
            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{OUT_W}x{OUT_H}", "-r", str(fps), "-i", "-",
            "-i", str(cut), "-map", "0:v", "-map", "1:a",
            "-vf", ",".join(vf),
-           "-c:v", "h264_nvenc", "-preset", "p6", "-rc", "vbr", "-cq", "19", "-b:v", "0",
-           "-profile:v", "high", "-c:a", "aac", "-b:a", "192k",
+           *encode_args(19), "-profile:v", "high", "-c:a", "aac", "-b:a", "192k",
            "-movflags", "+faststart", str(out)]
     print("+ ffmpeg (vertical render) ->", out)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
@@ -39,8 +60,9 @@ def render_vertical(cut: Path, path: CropPath, fps: Fraction, windows: dict[int,
         for i, frame in with_transitions(_frames(cap), windows, d):
             k = min(i, last)
             x, y = path.xs[k], path.ys[k]
-            crop = frame[y:y + path.ch, x:x + path.cw]
-            img = cv2.resize(crop, (OUT_W, OUT_H), interpolation=cv2.INTER_LANCZOS4)
+            cw, ch = path.size(k)
+            crop = frame[y:y + ch, x:x + cw]
+            img = compose(crop)
             if overlay:
                 overlay.apply(img, i / float(fps))
             proc.stdin.write(img.tobytes())

@@ -16,25 +16,30 @@ for the web app, and `pip install -r requirements.txt`.
 ./stop.sh      # stops it
 ```
 
-Logs go to `.run/server.log`. To run in the foreground instead:
+Logs go to `.run/server.log`. Heavy work runs at low priority. Long shorts
+are cut in passes of at most 8 clips, so memory stays around 2 GB however
+long the short is. Encoding uses the GPU (NVENC) when available; otherwise a
+light CPU setting is used, and the render log says which. To run in the foreground instead:
 `python -m server`.
 
 - **Landing / library** – import a lecture from a YouTube link, an upload, or a
   file already on this computer (linked, not copied). Each lecture is analysed
   once: waveform, pauses, thumbnail.
-- **Studio** (watch & mark) – scrub the video, `I` / `O` to mark, `Enter` to add,
-  drag on the waveform, `Ctrl`+scroll to zoom. No transcript needed.
-- **Transcript** (read & select) – transcribe once, then search the lecture and
-  select sentences to make clips. Pauses that will be cut are shown inline.
+- **Editor** – one screen: the transcript on the left (search; click a
+  sentence to select it, shift+click to extend, double-click to correct the
+  text, and corrections are used in the captions), the video and waveform
+  timeline in the middle (`I` / `O` to mark, `Enter` to add, drag to select,
+  scroll to move, `Ctrl`+scroll to zoom), and the preview and settings on the
+  right. Selecting in either place selects in both.
 - **Framing** – each lecture is analysed once for its camera positions and
   the lecturer's face (face recognition), so he is found even in wide shots
   where audience faces are bigger, and held in the same spot every time a
-  camera comes back. In Studio, drag the orange frame on the video (or a camera
+  camera comes back. In the editor, drag the orange frame on the video (or a camera
   card in the Framing tab) to set a camera by hand; it applies to every shot
   from that camera. The CLI does the same (cached in `<video>.cameras.json`;
   `--no-lock` to just follow the main face).
-- Both modes edit the same short. Settings (pause threshold, morph/fade/jump
-  cuts, caption style, name plate, zoom, grade) update a live 9:16 preview;
+- Settings (pause threshold, morph/fade/jump
+  cuts, caption style, name plate, zoom in or out, grade) update a live 9:16 preview;
   **Render** runs in the background and the result plays and downloads in place.
 
 App data lives in `data/` (override with `SHORTS_DATA=/path`). For frontend
@@ -94,3 +99,11 @@ Other flags: `--min-gap 0.4` (cut pauses longer than this), `--zoom 1.15`
 
 `shorts/pipeline.py` wraps all of this in one call (`make_short`) used by both
 the CLI and the web server (`server/`: FastAPI, a GPU job queue, JSON storage).
+
+## Checking a render
+
+`python tests/verify_render.py <video> --range 322-445` renders a short and
+checks it is exactly what the editor planned. It compares the cut plan with
+the editor's estimate, checks the length to the frame, compares sampled frames
+with the planned crop of the source, checks manual framing and per-camera
+zoom, and checks audio sync.

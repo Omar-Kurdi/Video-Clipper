@@ -3,6 +3,7 @@ import json
 import re
 import subprocess
 import threading
+from functools import lru_cache
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,8 +11,10 @@ import cv2
 import numpy as np
 
 from shorts.captions import Overlay, chunk, style_from_dict
-from shorts.reframe import DETECT_WIDTH, _detector
+from shorts.reframe import DETECT_WIDTH, _detector, crop_size
+from shorts.render import compose
 from shorts.transcribe import load_words, words_path
+from shorts.util import encode_args
 
 from . import store
 
@@ -105,7 +108,7 @@ def analyze(lid: str, report) -> dict:
     if not playable:
         report(progress=0.1, stage="making a browser preview")
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vf", "scale=-2:720",
-                        "-c:v", "h264_nvenc", "-cq", "28", "-c:a", "aac", "-b:a", "128k",
+                        *encode_args(28), "-c:a", "aac", "-b:a", "128k",
                         "-movflags", "+faststart", str(d / "proxy.mp4")], check=True)
 
     report(progress=0.4, stage="reading the audio")
@@ -155,7 +158,7 @@ def framing_track(lid: str) -> list[list[float]] | None:
             fx, fy = cam["auto"]["x"], cam["auto"]["y"]
         else:
             fx, fy = 0.5, 0.4
-        out.append([t, fx, fy, cid])
+        out.append([t, fx, fy, cid, cam.get("zoom")])
     return out
 
 
@@ -215,6 +218,48 @@ def playback_path(lid: str) -> Path:
     return proxy if proxy.exists() else store.source_path(lid)
 
 
+def edit_segment(lid: str, k: int, text: str | None) -> dict:
+    """Replace the text of sentence k (None = revert to what was recognised).
+
+    Timings are kept: with the same number of words each keeps its own; if the
+    edit adds or removes words, the sentence's time span is shared out by
+    word length. The recognised words are kept so the edit can be undone.
+    """
+    data = transcript(lid)
+    if data is None:
+        raise KeyError("transcript")
+    segs, words = data["segments"], data["words"]
+    seg = segs[k]
+    old = words[seg["w0"]:seg["w1"]]
+    if text is None:
+        new = seg.pop("orig", old)
+        seg.pop("edited", None)
+    else:
+        tokens = text.split()
+        if not tokens:
+            raise ValueError("a sentence can't be empty")
+        seg.setdefault("orig", old)
+        if len(tokens) == len(old):
+            new = [{**w, "w": t} for w, t in zip(old, tokens)]
+        else:
+            s0, s1 = seg["s"], seg["e"]
+            total = sum(len(t) + 1 for t in tokens)
+            new, t = [], s0
+            for tok in tokens:
+                dur = (s1 - s0) * (len(tok) + 1) / total
+                new.append({"w": tok, "s": round(t, 3), "e": round(t + dur * 0.92, 3)})
+                t += dur
+        seg["edited"] = True
+    delta = len(new) - len(old)
+    words[seg["w0"]:seg["w1"]] = new
+    seg["w1"] += delta
+    for later in segs[k + 1:]:
+        later["w0"] += delta
+        later["w1"] += delta
+    words_path(store.source_path(lid)).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
 def transcript(lid: str) -> dict | None:
     src = store.source_path(lid)
     if not words_path(src).exists():
@@ -239,6 +284,39 @@ def _frame_at(src: Path, t: float, w: int, h: int) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.uint8)[: w * h * 3].reshape(h, w, 3).copy()
 
 
+@lru_cache(maxsize=1)
+def _sface():
+    from shorts.cameras import _recognizer
+    return _recognizer()
+
+
+def _framing_at(lid: str, frame: np.ndarray, W: int, H: int) -> tuple[float, float, float | None]:
+    """Same choice as the render: the camera's manual framing, else the
+    recognised lecturer, else the camera's usual framing, else the centre."""
+    p = cameras_path(lid)
+    if p.exists():
+        from shorts.cameras import framing, identify, match_camera, signature
+
+        data = json.loads(p.read_text())
+        cam = match_camera(data, signature(frame))
+        z = cam.get("zoom") if cam else None
+        if cam and cam.get("manual"):
+            return cam["manual"]["x"] * W, cam["manual"].get("y", 0.36) * H, z
+        if data.get("reference"):
+            hit = identify(frame, _detector(W, H), _sface(), np.array(data["reference"], dtype=np.float32))
+            if hit:
+                return hit[0] * W, hit[1] * H, z
+        fr = framing(cam)
+        return (fr[0] * W, fr[1] * H, z) if fr else (W / 2, H * 0.4, z)
+    scale = DETECT_WIDTH / W
+    _, faces = _detector(DETECT_WIDTH, round(H * scale)).detect(
+        cv2.resize(frame, (DETECT_WIDTH, round(H * scale)), interpolation=cv2.INTER_AREA))
+    if faces is not None and len(faces):
+        f = max(faces, key=lambda f: f[2] * f[3] * f[14])
+        return (f[0] + f[2] / 2) / scale, (f[1] + f[3] / 2) / scale, None
+    return W / 2, H / 2, None
+
+
 def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom: float,
                   captions: bool) -> bytes:
     meta = store.get_lecture(lid)
@@ -246,18 +324,11 @@ def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom:
     W, H = meta["width"], meta["height"]
     frame = _frame_at(src, t, W, H)
 
-    scale = DETECT_WIDTH / W
-    _, faces = _detector(DETECT_WIDTH, round(H * scale)).detect(
-        cv2.resize(frame, (DETECT_WIDTH, round(H * scale)), interpolation=cv2.INTER_AREA))
-    cx, cy = W / 2, H / 2
-    if faces is not None and len(faces):
-        f = max(faces, key=lambda f: f[2] * f[3] * f[14])
-        cx, cy = (f[0] + f[2] / 2) / scale, (f[1] + f[3] / 2) / scale
-    ch = int(H / zoom) // 2 * 2
-    cw = int(ch * 9 / 16) // 2 * 2
+    cx, cy, cam_zoom = _framing_at(lid, frame, W, H)
+    ch, cw = crop_size(W, H, cam_zoom or zoom)
     x = int(np.clip(cx - cw / 2, 0, W - cw))
     y = int(np.clip(cy - 0.36 * ch, 0, H - ch))
-    img = cv2.resize(frame[y:y + ch, x:x + cw], (1080, 1920), interpolation=cv2.INTER_AREA)
+    img = compose(frame[y:y + ch, x:x + cw])
 
     style = style_from_dict(style_data or {})
     chunks = []

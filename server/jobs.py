@@ -1,5 +1,6 @@
 """Background jobs. GPU work (transcribe, analyze, render) runs one at a time;
 downloads run on their own lane so an import doesn't wait behind a render."""
+import os
 import queue
 import threading
 import time
@@ -49,6 +50,12 @@ class Jobs:
             self._jobs[jid].update(fields)
 
     def _worker(self, q: queue.Queue) -> None:
+        # background work runs at low priority so the desktop stays responsive;
+        # child processes (ffmpeg) inherit it
+        try:
+            os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
+        except OSError:
+            pass
         while True:
             jid, fn = q.get()
             self._set(jid, status="running", started=time.time())

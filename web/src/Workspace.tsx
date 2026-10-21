@@ -1,0 +1,443 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, type Range } from "./api";
+import { RenderButton, TopBar, type Ed } from "./Editor";
+import { CaptionsPanel, ClipList, CutsPanel, FramingPanel, Preview, Stats, cropWidth } from "./panels";
+import { at, trackFor, zoomAt, type Track } from "./Quick";
+import { Timeline } from "./Timeline";
+import { clamp, fmt, normalize } from "./util";
+
+type Tab = "cuts" | "captions" | "framing";
+
+/**
+ * The editor: transcript (read, search, select, edit) on the left, the video
+ * and timeline (watch, mark, fine-tune) in the middle, preview and settings on
+ * the right. One selection, in seconds, is shared by the transcript and the
+ * timeline.
+ */
+export function Workspace({ ed }: { ed: Ed }) {
+  const video = useRef<HTMLVideoElement>(null);
+  const duration = ed.lecture.duration ?? 0;
+  const [time, setTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [sel, setSel] = useState<Range | null>(null);
+  const [view, setView] = useState<Range>([0, Math.min(duration || 120, 120)]);
+  const [tab, setTab] = useState<Tab>("cuts");
+  const stopAt = useRef<number | null>(null);
+
+  // ----- playback -----
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const v = video.current;
+      if (v) {
+        setTime(v.currentTime);
+        if (stopAt.current != null && v.currentTime >= stopAt.current) {
+          v.pause();
+          stopAt.current = null;
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
+
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const show = useCallback((a: number, b: number) => {
+    const [a0, b0] = viewRef.current;
+    const span = b0 - a0;
+    if (a < a0 || b > b0) {
+      const ns = Math.max(span, Math.min(duration, (b - a) * 1.2));
+      const na = clamp(a - (ns - (b - a)) / 2, 0, Math.max(0, duration - ns));
+      setView([na, na + ns]);
+    }
+  }, [duration]);
+  // keep the playhead in view when it moves, without fighting manual scrolling
+  useEffect(() => { show(time, time); }, [time, show]);
+
+  const seek = useCallback((t: number) => {
+    const v = video.current;
+    if (!v) return;
+    v.currentTime = clamp(t, 0, duration);
+    setTime(v.currentTime);
+  }, [duration]);
+  const toggle = () => {
+    const v = video.current;
+    if (!v) return;
+    if (v.paused) { stopAt.current = null; v.play(); } else v.pause();
+  };
+  const playRange = (r: Range) => {
+    seek(r[0]);
+    stopAt.current = r[1];
+    video.current?.play();
+  };
+  const select = (r: Range | null) => {
+    setSel(r);
+    if (r) show(r[0], r[1]);
+  };
+  const markIn = () => select([time, sel && sel[1] > time ? sel[1] : Math.min(duration, time + 15)]);
+  const markOut = () => select([sel && sel[0] < time ? sel[0] : Math.max(0, time - 15), time]);
+  const add = () => {
+    if (!sel || sel[1] - sel[0] < 0.5) return;
+    ed.addRange(sel);
+    setSel(null);
+  };
+
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.closest("input, textarea, select, [contenteditable]")) return;
+      if (e.key === " ") { e.preventDefault(); toggle(); }
+      else if (e.key === "i" || e.key === "I") markIn();
+      else if (e.key === "o" || e.key === "O") markOut();
+      else if (e.key === "Enter") add();
+      else if (e.key === "ArrowLeft") seek(time - (e.shiftKey ? 5 : 1));
+      else if (e.key === "ArrowRight") seek(time + (e.shiftKey ? 5 : 1));
+      else if (e.key === "Escape") setSel(null);
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  });
+
+  // ----- 9:16 frame on the video -----
+  const s = ed.short;
+  const [track, setTrack] = useState<Track>([]);
+  useEffect(() => { trackFor(ed.lecture.id, ed.framingVersion > 0).then(setTrack); }, [ed.lecture.id, ed.framingVersion]);
+  const [guideDrag, setGuideDragState] = useState<number | null>(null);
+  const guideRef = useRef<number | null>(null);
+  const setGuideDrag = (v: number | null) => { guideRef.current = v; setGuideDragState(v); };
+  const near = track.length ? track.reduce((b, p) => (Math.abs(p[0] - time) < Math.abs(b[0] - time) ? p : b)) : null;
+  const cam = ed.cameras?.cameras.find((c) => c.id === near?.[3]) ?? null;
+  const cw = Math.min(1, cropWidth(ed, cam?.zoom ?? zoomAt(track, time) ?? s?.zoom ?? 1));
+  const fx = guideDrag ?? (track.length ? at(track, time)[0] : 0.5);
+  const guideLeft = Math.min(1 - cw, Math.max(0, fx - cw / 2)) * 100;
+  const major = [...(ed.cameras?.cameras ?? [])].filter((c) => c.share >= 0.02).sort((a, b) => b.share - a.share);
+  const camIndex = cam ? major.findIndex((c) => c.id === cam.id) : -1;
+  const guideLabel = cam
+    ? `${camIndex >= 0 ? `Camera ${camIndex + 1}` : "Cutaway"} · ${cam.manual ? "manual" : cam.has_speaker ? "on the lecturer" : "centred"} · drag to adjust`
+    : "9:16 · follows the lecturer";
+  const guideX = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
+    return Math.min(1 - cw / 2, Math.max(cw / 2, (e.clientX - r.left) / r.width));
+  };
+
+  const span = view[1] - view[0];
+  const zoomTo = (ns: number) => {
+    ns = clamp(ns, 5, duration);
+    const c = clamp(time, view[0], view[1]);
+    const a = clamp(c - (c - view[0]) * (ns / span), 0, Math.max(0, duration - ns));
+    setView([a, a + ns]);
+  };
+
+  return (
+    <div className="app ws">
+      <TopBar ed={ed} />
+      <div className="ws-grid">
+        <TranscriptPanel ed={ed} time={time} playing={playing} sel={sel} onSelect={select} seek={seek}
+          play={() => video.current?.play()} />
+
+        <aside className="side" aria-label="Preview and settings">
+          <Preview ed={ed} t={time} width={252} />
+          <Stats ed={ed} />
+          <RenderButton ed={ed} block />
+          <div className="tabs" role="tablist" aria-label="Settings sections">
+            {(["cuts", "captions", "framing"] as Tab[]).map((t) => (
+              <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
+                {t === "cuts" ? "Cuts" : t === "captions" ? "Captions" : "Framing"}
+              </button>
+            ))}
+          </div>
+          {tab === "cuts" && <CutsPanel ed={ed} />}
+          {tab === "captions" && <CaptionsPanel ed={ed} />}
+          {tab === "framing" && <FramingPanel ed={ed} />}
+        </aside>
+
+        <section className="source" aria-label="Video and timeline">
+          <div className="player" style={{
+            // exactly the video's shape, so the 9:16 frame lines up with the picture
+            aspectRatio: `${ed.lecture.width ?? 16} / ${ed.lecture.height ?? 9}`,
+            width: `min(100%, calc(46vh * ${(ed.lecture.width ?? 16) / (ed.lecture.height ?? 9)}))`,
+          }}>
+            <video ref={video} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline
+              onPlay={() => setPlaying(true)} onPause={() => { setPlaying(false); setTime(video.current?.currentTime ?? 0); }}
+              onSeeked={() => setTime(video.current?.currentTime ?? 0)} onClick={toggle} />
+            <div className={`crop-guide ${cam ? "draggable" : ""} ${cam?.manual ? "manual" : ""}`}
+              style={{ width: `${cw * 100}%`, left: `${guideLeft}%` }}
+              onPointerDown={(e) => {
+                if (!cam) return;
+                e.stopPropagation();
+                try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+                setGuideDrag(guideX(e));
+              }}
+              onPointerMove={(e) => guideRef.current != null && setGuideDrag(guideX(e))}
+              onPointerUp={(e) => {
+                if (guideRef.current == null || !cam) return;
+                const x = guideX(e);
+                ed.setFraming(cam.id, { x: Math.round(x * 1000) / 1000, y: cam.manual?.y ?? cam.auto?.y ?? 0.36 });
+                setGuideDrag(null);
+              }}>
+              <span>{guideLabel}</span>
+            </div>
+          </div>
+          <div className="transport">
+            <button type="button" className="round" aria-label={playing ? "Pause" : "Play"} onClick={toggle}>
+              {playing ? <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 4h4v16H6zM14 4h4v16h-4z" /></svg>
+                : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z" /></svg>}
+            </button>
+            <span className="tc">{fmt(time, 2)}</span>
+            <span className="tc dim">/ {fmt(duration, 2)}</span>
+            <button type="button" className="btn small" onClick={() => seek(time - 5)} aria-label="Back 5 seconds">−5s</button>
+            <button type="button" className="btn small" onClick={() => seek(time + 5)} aria-label="Forward 5 seconds">+5s</button>
+            <span className="grow" />
+            <button type="button" className="btn small" onClick={markIn}><kbd>I</kbd> Mark in</button>
+            <button type="button" className="btn small" onClick={markOut}><kbd>O</kbd> Mark out</button>
+          </div>
+          {sel && (
+            <div className="sel-strip" role="toolbar" aria-label="Selection">
+              <span className="tc">{fmt(sel[0], 1)} – {fmt(sel[1], 1)}</span>
+              <span className="dim">{(sel[1] - sel[0]).toFixed(1)}s selected</span>
+              <span className="grow" />
+              <button type="button" className="btn small" onClick={() => playRange(sel)}>Play</button>
+              <button type="button" className="btn small accent" onClick={add}>+ Add to {s?.name ?? "short"} <kbd>↵</kbd></button>
+              <button type="button" className="btn small" onClick={() => { ed.newShort([sel]); setSel(null); }}>New short</button>
+              <button type="button" className="icon" aria-label="Clear selection" onClick={() => setSel(null)}>✕</button>
+            </div>
+          )}
+
+          <div className="tl-head">
+            <b>Timeline</b>
+            <span className="legend"><i className="lg-sel" />In the short</span>
+            <span className="legend"><i className="lg-new" />Selection</span>
+            <span className="legend"><i className="lg-pause" />Pause (removed)</span>
+            <span className="grow" />
+            <span className="muted small">Drag to select · click to seek · scroll to move · Ctrl+scroll to zoom</span>
+            <button type="button" className="btn small" aria-label="Zoom out" onClick={() => zoomTo(span * 1.6)}>−</button>
+            <button type="button" className="btn small" aria-label="Zoom in" onClick={() => zoomTo(span / 1.6)}>+</button>
+          </div>
+          <Timeline duration={duration} peaks={ed.waveform} speech={ed.speech} minGap={s?.min_gap ?? 0.4}
+            ranges={s?.ranges ?? []} selection={sel} time={time} view={view} onView={setView}
+            onSeek={seek} onSelect={setSel} />
+          <ClipList ed={ed} onPlay={playRange} />
+        </section>
+
+
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- transcript ---------------- */
+
+function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
+  ed: Ed; time: number; playing: boolean; sel: Range | null; onSelect: (r: Range | null) => void;
+  seek: (t: number) => void; play: () => void;
+}) {
+  const tr = ed.transcript;
+  const s = ed.short;
+  const article = useRef<HTMLElement>(null);
+  const [query, setQuery] = useState("");
+  const [hitIdx, setHitIdx] = useState(0);
+  const [follow, setFollow] = useState(true);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const words = useMemo(() => tr?.words ?? [], [tr]);
+  const wordSeg = useMemo(() => {
+    const m = new Int32Array(words.length);
+    tr?.segments.forEach((g, k) => { for (let i = g.w0; i < g.w1; i++) m[i] = k; });
+    return m;
+  }, [tr, words.length]);
+  const segRange = (k: number): Range => {
+    const g = tr!.segments[k];
+    return [words[g.w0]?.s ?? g.s, words[g.w1 - 1]?.e ?? g.e];
+  };
+  const norm = useMemo(() => words.map((w) => normalize(w.w)), [words]);
+
+  // search
+  const hits = useMemo(() => {
+    const toks = query.trim().split(/\s+/).map(normalize).filter(Boolean);
+    if (!toks.length) return [] as [number, number][];
+    const out: [number, number][] = [];
+    for (let i = 0; i + toks.length <= norm.length; i++) {
+      if (toks.every((t, k) => norm[i + k].includes(t))) out.push([i, i + toks.length - 1]);
+    }
+    return out;
+  }, [query, norm]);
+  const hitSet = useMemo(() => {
+    const set = new Set<number>();
+    for (const [a, b] of hits) for (let i = a; i <= b; i++) set.add(i);
+    return set;
+  }, [hits]);
+  useEffect(() => setHitIdx(0), [query]);
+  const jump = (k: number) => {
+    if (!hits.length) return;
+    const n = (k + hits.length) % hits.length;
+    setHitIdx(n);
+    article.current?.querySelector(`[data-i="${hits[n][0]}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    seek(words[hits[n][0]].s);
+  };
+
+  // spoken word (DOM class only, no re-render of the whole text)
+  const nowIdx = useMemo(() => {
+    let lo = 0, hi = words.length - 1, ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (words[mid].s <= time) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return ans;
+  }, [time, words]);
+  useEffect(() => {
+    const root = article.current;
+    if (!root) return;
+    root.querySelector(".now")?.classList.remove("now");
+    if (nowIdx < 0) return;
+    const el = root.querySelector(`[data-i="${nowIdx}"]`);
+    el?.classList.add("now");
+    if (playing && follow && el) {
+      const r = el.getBoundingClientRect(), b = root.getBoundingClientRect();
+      if (r.top < b.top + 40 || r.bottom > b.bottom - 40) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [nowIdx, playing, follow]);
+
+  // selection: click = sentence, shift+click = extend, drag = sentences touched
+  const onMouseUp = (e: React.MouseEvent) => {
+    if (!tr || editing != null) return;
+    const target = e.target as HTMLElement;
+    if (target.closest(".ts, .para-tools, .seg-edit")) return;
+    const sx = window.getSelection();
+    if (sx && !sx.isCollapsed && sx.rangeCount) {
+      const inside = [...(article.current?.querySelectorAll("[data-i]") ?? [])].filter((el) => sx.containsNode(el, true));
+      sx.removeAllRanges();
+      if (!inside.length) return;
+      const a = wordSeg[Number(inside[0].getAttribute("data-i"))];
+      const b = wordSeg[Number(inside[inside.length - 1].getAttribute("data-i"))];
+      onSelect([segRange(Math.min(a, b))[0], segRange(Math.max(a, b))[1]]);
+      return;
+    }
+    const wEl = target.closest("[data-i]");
+    const pEl = target.closest("[data-seg]");
+    const k = wEl ? wordSeg[Number(wEl.getAttribute("data-i"))] : pEl ? Number(pEl.getAttribute("data-seg")) : null;
+    if (k == null) return;
+    const r = segRange(k);
+    if (e.shiftKey && sel) onSelect([Math.min(sel[0], r[0]), Math.max(sel[1], r[1])]);
+    else { onSelect(r); seek(r[0]); }
+  };
+
+  // editing a sentence
+  const startEdit = (k: number) => {
+    const g = tr!.segments[k];
+    setDraft(words.slice(g.w0, g.w1).map((w) => w.w).join(" "));
+    setEditing(k);
+  };
+  const save = async (k: number, text: string | null) => {
+    setSaving(true);
+    try {
+      await ed.editSegment(k, text);
+      setEditing(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const ranges = s?.ranges ?? [];
+  const minGap = s?.min_gap ?? 0.4;
+  const body = useMemo(() => {
+    if (!tr) return null;
+    const inShort = (t: number) => ranges.some(([a, b]) => t >= a && t <= b);
+    const inSel = (t: number) => sel != null && t >= sel[0] && t <= sel[1];
+    return tr.segments.map((seg, k) => {
+      if (editing === k) {
+        return (
+          <div className="para editing" key={k} data-seg={k}>
+            <span className="ts" dir="ltr">{fmt(seg.s)}</span>
+            <div className="seg-edit">
+              <textarea dir="auto" value={draft} autoFocus rows={Math.max(2, Math.ceil(draft.length / 48))}
+                aria-label="Edit sentence" onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(k, draft); }
+                  if (e.key === "Escape") { e.preventDefault(); setEditing(null); }
+                }} />
+              <div className="seg-edit-bar">
+                <button type="button" className="btn small accent" disabled={saving || !draft.trim()} onClick={() => save(k, draft)}>Save <kbd>↵</kbd></button>
+                <button type="button" className="btn small" onClick={() => setEditing(null)}>Cancel <kbd>Esc</kbd></button>
+                {seg.edited && <button type="button" className="link small" onClick={() => save(k, null)}>Revert to recognised text</button>}
+              </div>
+            </div>
+          </div>
+        );
+      }
+      const parts: React.ReactNode[] = [];
+      for (let i = seg.w0; i < seg.w1; i++) {
+        const w = tr.words[i];
+        if (i > seg.w0) {
+          const gap = w.s - tr.words[i - 1].e;
+          parts.push(gap > minGap
+            ? <span key={`g${i}`} className={`pause ${inShort(w.s) ? "cut" : ""}`} dir="ltr">{gap.toFixed(1)}s</span>
+            : " ");
+        }
+        const mid = (w.s + w.e) / 2;
+        const cls = [inShort(mid) ? "in" : "", hitSet.has(i) ? "hit" : "", inSel(mid) ? "picked" : ""].join(" ").trim();
+        parts.push(<span key={i} data-i={i} className={cls || undefined}>{w.w}</span>);
+      }
+      const whole = sel && segRange(k)[0] >= sel[0] - 0.01 && segRange(k)[1] <= sel[1] + 0.01;
+      return (
+        <div className={`para ${whole ? "picked" : ""}`} key={k} data-seg={k} onDoubleClick={() => startEdit(k)}>
+          <button type="button" className="ts" dir="ltr" onClick={() => { seek(seg.s); play(); }} aria-label={`Play from ${fmt(seg.s)}`}>{fmt(seg.s)}</button>
+          <p>{parts}{seg.edited && <span className="edited-tag" dir="ltr">edited</span>}</p>
+          <span className="para-tools">
+            <button type="button" className="icon" aria-label="Edit this sentence" title="Edit text (or double-click)" onClick={() => startEdit(k)}>✎</button>
+          </span>
+        </div>
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel, editing, draft, saving]);
+
+  const lang = tr?.language ?? ed.lecture.language ?? "ar";
+  const rtl = ["ar", "fa", "ur", "he"].includes(lang);
+
+  return (
+    <section className="transcript-panel" aria-label="Transcript">
+      {!tr ? (
+        <div className="no-transcript">
+          <h2>No transcript yet</h2>
+          <p>Transcribing lets you read the lecture, search it, select by sentence and correct the text. It runs on your GPU, roughly a minute or two per hour of lecture.</p>
+          {ed.transcribeJob ? (
+            <div className="render-progress block" role="status">
+              <span>Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>
+              <progress max={1} value={ed.transcribeJob.progress} />
+            </div>
+          ) : (
+            <button type="button" className="btn primary" onClick={ed.transcribe}>Transcribe lecture</button>
+          )}
+          <p className="muted small">You can already pick moments on the timeline; captions for your clips are transcribed when you render.</p>
+        </div>
+      ) : (
+        <>
+          <div className="search-row">
+            <label className="search">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+              <span className="sr">Search lecture</span>
+              <input type="search" dir="auto" value={query} placeholder="Search the lecture" onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") jump(hitIdx + (e.shiftKey ? -1 : 1)); }} />
+              {query && <span className="count">{hits.length ? `${hitIdx + 1} / ${hits.length}` : "no matches"}</span>}
+            </label>
+            <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx - 1)} aria-label="Previous match">↑</button>
+            <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx + 1)} aria-label="Next match">↓</button>
+          </div>
+          <div className="howto">
+            <span><b>Click</b> a sentence to select</span><span><b>Shift+click</b> to extend</span>
+            <span><b>Double-click</b> to fix text</span>
+            <label className="follow"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />Follow playback</label>
+          </div>
+          <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""}`} onMouseUp={onMouseUp}>
+            {body}
+          </article>
+        </>
+      )}
+    </section>
+  );
+}

@@ -12,7 +12,7 @@ from .plan import CutSettings, Segment, output_frames, plan
 from .reframe import ReframeSettings, crop_path, ease_crop_across
 from .render import render_vertical
 from .transcribe import load_words, transcribe_ranges, words_path
-from .util import probe
+from .util import gpu_encoder, probe
 
 Progress = Callable[[str, float], None]  # (stage, 0..1 overall)
 
@@ -89,13 +89,20 @@ def estimate(video: Path, o: ShortOptions, words: list[dict] | None = None) -> d
 
 
 def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | None = None,
-               keep_temp: bool = False, log: Callable[[str], None] = print) -> dict:
+               keep_temp: bool = False, log: Callable[[str], None] = print,
+               report: Path | None = None) -> dict:
+    """Render the short. `report` (optional) receives the exact plan used —
+    segments, transitions and the crop of every frame — for verification."""
     words = get_words(video, o, progress)
+    # cut exactly as the editor previewed it: the plan only uses the lecture's
+    # full transcript (as the estimate/preview does), never range-only words
+    plan_words = load_words(video) if words_path(video).exists() else []
     cb = _stage(progress, "plan")
-    info, segs, firsts = plan_short(video, o, words)
+    info, segs, firsts = plan_short(video, o, plan_words)
     fps, d = info.fps, o.transition_frames
     n_out = output_frames(segs, d)
-    log(f"{len(segs)} segments, {len(segs) - 1} cuts, {float(n_out / fps):.1f}s output")
+    log(f"{len(segs)} segments, {len(segs) - 1} cuts, {float(n_out / fps):.1f}s output; "
+        + ("encoding on the GPU (NVENC)" if gpu_encoder() else "GPU encoder unavailable, encoding on the CPU (slower)"))
     cb(1.0)
 
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -105,7 +112,7 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
             [{"src_start": float(s.f0 / fps), "src_end": float(s.f1 / fps)} for s in segs], indent=1))
         cut = work / "cut.mkv"
         cb = _stage(progress, "cut")
-        render_cut(video, segs, fps, d, cut, work)
+        render_cut(video, segs, fps, d, cut, work, on_progress=cb)
         cb(1.0)
 
         js = joins(segs, d)
@@ -136,6 +143,14 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
         render_vertical(cut, path, fps, windows, d, overlay, out, o.grade,
                         on_frame=lambda i: cb(i / n_out))
         cb(1.0)
+        if report is not None:
+            report.write_text(json.dumps({
+                "fps": [fps.numerator, fps.denominator], "fade": d,
+                "segments": [[s.f0, s.f1] for s in segs],
+                "windows": {str(k): v for k, v in windows.items()},
+                "xs": path.xs.tolist(), "ys": path.ys.tolist(),
+                "cws": path.cws.tolist(), "chs": path.chs.tolist(),
+            }))
         return {"duration": float(n_out / fps), "cuts": len(segs) - 1,
                 "hard_cuts": hard, "camera_changes": len(path.camera_changes)}
     finally:

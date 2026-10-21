@@ -3,11 +3,13 @@
     uvicorn server.app:app --port 8000
 """
 import json
+import os
 import shutil
 import time
 from dataclasses import asdict
 from pathlib import Path
 
+import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +23,30 @@ from . import media, store
 from .jobs import Jobs
 
 app = FastAPI(title="Lecture Shorts")
+
+# leave CPU for the desktop: OpenCV would otherwise use every core
+cv2.setNumThreads(max(2, (os.cpu_count() or 4) // 2))
+
+MIN_FREE_GB = 4.0
+
+
+def _free_gb() -> float:
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except OSError:
+        pass
+    return 1e9
+
+
+@app.on_event("startup")
+def _cleanup() -> None:
+    """Remove work files left by a render that was interrupted (crash, reboot)."""
+    for d in store.DATA.glob("lectures/*/renders/shorts-*"):
+        shutil.rmtree(d, ignore_errors=True)
+    for f in store.DATA.glob("lectures/*/renders/*.part.mp4"):
+        f.unlink(missing_ok=True)
 jobs = Jobs()
 WEB = Path(__file__).resolve().parent.parent / "web" / "dist"
 
@@ -209,6 +235,20 @@ def lecture_transcript(lid: str):
     return data
 
 
+class SegmentEditIn(BaseModel):
+    text: str | None = None  # null = revert to the recognised text
+
+
+@app.put("/api/lectures/{lid}/transcript/segments/{k}")
+def edit_transcript_segment(lid: str, k: int, body: SegmentEditIn):
+    try:
+        return media.edit_segment(lid, k, body.text)
+    except IndexError:
+        raise HTTPException(404, "no such sentence")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/lectures/{lid}/transcribe")
 def lecture_transcribe(lid: str):
     meta = store.get_lecture(lid)
@@ -248,6 +288,7 @@ def lecture_preview(lid: str, body: PreviewIn):
 
 class FramingIn(BaseModel):
     manual: dict | None = None  # {"x": 0..1, "y": 0..1} crop centre / face height, or null for auto
+    zoom: float | None = None   # this camera's own zoom, or null to use the short's
 
 
 @app.get("/api/lectures/{lid}/cameras")
@@ -271,7 +312,11 @@ def set_camera_framing(lid: str, cid: int, body: FramingIn):
     cam = next((c for c in data["cameras"] if c["id"] == cid), None)
     if cam is None:
         raise HTTPException(404, "no such camera")
-    cam["manual"] = body.manual
+    # only change what was sent
+    if "manual" in body.model_fields_set:
+        cam["manual"] = body.manual
+    if "zoom" in body.model_fields_set:
+        cam["zoom"] = None if body.zoom is None else max(0.6, min(1.6, float(body.zoom)))
     media.save_cameras(lid, data)
     return {k: v for k, v in cam.items() if k != "sig"}
 
@@ -354,6 +399,9 @@ def render_short(lid: str, sid: str):
     running = jobs.active(short_id=sid)
     if running:
         return running
+    if _free_gb() < MIN_FREE_GB:
+        raise HTTPException(503, f"Only {_free_gb():.1f} GB of memory is free; close some apps and try again "
+                                 f"(rendering needs about {MIN_FREE_GB:.0f} GB).")
     opts = _options(meta, s)
     out = store.render_path(lid, sid)
 

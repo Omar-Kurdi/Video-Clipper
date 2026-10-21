@@ -2,6 +2,7 @@
 import json
 import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from fractions import Fraction
 from pathlib import Path
 
@@ -52,3 +53,22 @@ def probe(path: Path) -> VideoInfo:
 def run(cmd: list[str], **kw) -> None:
     print("+", " ".join(cmd[:6]), "..." if len(cmd) > 6 else "")
     subprocess.run(cmd, check=True, **kw)
+
+
+@lru_cache(maxsize=1)
+def gpu_encoder() -> bool:
+    """True when ffmpeg can encode H.264 on the NVIDIA GPU (NVENC)."""
+    try:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=s=256x256:d=0.2",
+                            "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, timeout=30)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def encode_args(quality: int) -> list[str]:
+    """H.264 encoder settings: NVENC on the GPU, else a light CPU preset that
+    leaves cores free. `quality` ~ CRF (lower is better)."""
+    if gpu_encoder():
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(quality), "-b:v", "0"]
+    return ["-c:v", "libx264", "-preset", "veryfast", "-crf", str(quality), "-threads", "4"]

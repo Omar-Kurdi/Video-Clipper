@@ -166,14 +166,31 @@ def _camera(target: np.ndarray, dz: float, alpha: float, start: float | None = N
     return out
 
 
+def crop_size(W: int, H: int, zoom: float) -> tuple[int, int]:
+    """(height, width) of the source crop. zoom > 1 crops tighter; zoom < 1
+    takes a wider-than-9:16 area (letterboxed with a blurred fill)."""
+    ch = int(H / max(zoom, 1.0)) // 2 * 2
+    cw = min(int((H / zoom) * 9 / 16) // 2 * 2, W // 2 * 2)
+    if int(ch * 9 / 16) > W:
+        raise ValueError("source is narrower than 9:16")
+    return ch, cw
+
+
 @dataclass
 class CropPath:
-    cw: int
+    cw: int                    # crop size at the short's zoom
     ch: int
     xs: np.ndarray
     ys: np.ndarray
     camera_changes: list[int]  # frames where the source itself cuts to another shot
     thumbs: np.ndarray         # per-frame grey thumbnail of the frame centre
+    cws: np.ndarray | None = None  # per-frame crop size (cameras can have their own zoom)
+    chs: np.ndarray | None = None
+
+    def size(self, k: int) -> tuple[int, int]:
+        if self.cws is None:
+            return self.cw, self.ch
+        return int(self.cws[k]), int(self.chs[k])
 
     def looks_different(self, a: int, b: int) -> bool:
         """True when frames a and b look like different shots."""
@@ -211,7 +228,8 @@ def _lock_shots(video: Path, bounds: list[int], W: int, H: int, identity: dict) 
         lect = (float(np.median([h[0] for h in hits])), float(np.median([h[1] for h in hits]))) if hits else None
         auto = framing(cam) if cam else None
         out.append({"camera": cam["id"] if cam else None, "manual": manual, "lecturer": lect,
-                     "camera_framing": auto, "found": ref is not None})
+                     "camera_framing": auto, "found": ref is not None,
+                     "zoom": cam.get("zoom") if cam else None})
     cap.release()
     return out
 
@@ -226,10 +244,8 @@ def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
     a camera's manual framing); without it the main face is followed.
     """
     fps, W, H, n, d1, dlong, samples, thumbs = _scan(video, on_frame)
-    ch = int(H / rs.zoom) // 2 * 2
-    cw = int(ch * 9 / 16) // 2 * 2
-    if cw > W:
-        raise ValueError("source is narrower than 9:16")
+    ch, cw = crop_size(W, H, rs.zoom)
+    cws, chs = np.full(n, cw), np.full(n, ch)
 
     detected = _shot_bounds(d1, dlong, fps)
     bounds = sorted(set(detected) | {f for f in forced if 0 < f < n}) + [n]
@@ -242,6 +258,8 @@ def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
     for k, (a, b) in enumerate(zip(bounds[:-1], bounds[1:])):
         frames = np.arange(a, b)
         info = shots[k] if shots else None
+        if info and info.get("zoom"):
+            chs[a:b], cws[a:b] = crop_size(W, H, info["zoom"])
         if info and info["manual"]:
             # the user placed this camera's frame: hold it exactly
             mx = info["manual"]["x"] * W
@@ -281,11 +299,11 @@ def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
             log.append("face")
         last = (cx_all[b - 1], cy_all[b - 1])
 
-    xs = np.clip(np.round(cx_all - cw / 2), 0, W - cw).astype(int)
-    ys = np.clip(np.round(cy_all - rs.face_y * ch), 0, H - ch).astype(int)
+    xs = np.clip(np.round(cx_all - cws / 2), 0, W - cws).astype(int)
+    ys = np.clip(np.round(cy_all - rs.face_y * chs), 0, H - chs).astype(int)
     print(f"reframe: {n} frames, camera changes at "
           f"{[round(b / fps, 2) for b in detected[1:]]}, crop {cw}x{ch}, shots: {log}")
-    return CropPath(cw, ch, xs, ys, detected[1:], thumbs)
+    return CropPath(cw, ch, xs, ys, detected[1:], thumbs, cws, chs)
 
 
 def ease_crop_across(path: CropPath, start: int, d: int) -> None:
@@ -299,3 +317,6 @@ def ease_crop_across(path: CropPath, start: int, d: int) -> None:
         t = t * t * (3 - 2 * t)
         path.xs[start + k] = round(path.xs[a] + (path.xs[b] - path.xs[a]) * t)
         path.ys[start + k] = round(path.ys[a] + (path.ys[b] - path.ys[a]) * t)
+        if path.cws is not None:
+            path.cws[start + k] = round(path.cws[a] + (path.cws[b] - path.cws[a]) * t) // 2 * 2
+            path.chs[start + k] = round(path.chs[a] + (path.chs[b] - path.chs[a]) * t) // 2 * 2
