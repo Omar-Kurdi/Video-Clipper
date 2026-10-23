@@ -205,8 +205,8 @@ function CameraCard({ ed, cam, index }: { ed: Ed; cam: Camera; index: number }) 
       </div>
       <div className="cam-meta">
         <b>Camera {index + 1}</b>
-        <span className="muted small">{Math.round(cam.share * 100)}% of the lecture · {cam.has_speaker ? "lecturer found" : "no lecturer (audience)"}</span>
-        <span className="small">{cam.manual ? "Manual framing" : cam.has_speaker ? "Auto: locked on the lecturer" : "Auto: centred"}</span>
+        <span className="muted small">{cam.share >= 0.01 ? `${Math.round(cam.share * 100)}%` : "<1%"} of the lecture · {cam.has_speaker ? "lecturer found" : "lecturer not recognised"}</span>
+        <span className="small">{cam.manual ? "Your framing (follows this angle even when the camera moves)" : cam.has_speaker ? "Auto: locked on the lecturer" : "Auto: centred. Drag the frame to place it"}</span>
         {cam.manual && <button type="button" className="link small" onClick={() => ed.setFraming(cam.id, null)}>Reset position to auto</button>}
         <div className="row cam-zoom">
           <label htmlFor={`camzoom${cam.id}`}>Zoom for this camera</label>
@@ -225,7 +225,8 @@ function CameraCard({ ed, cam, index }: { ed: Ed; cam: Camera; index: number }) 
 export function FramingPanel({ ed }: { ed: Ed }) {
   const s = ed.short;
   if (!s) return null;
-  const cams = (ed.cameras?.cameras ?? []).filter((c) => c.share >= 0.02).sort((a, b) => b.share - a.share);
+  // every angle seen at least twice; one-off shots (usually audience close-ups) are summarised
+  const cams = (ed.cameras?.cameras ?? []).filter((c) => c.count >= 2).sort((a, b) => b.count - a.count);
   const minor = (ed.cameras?.cameras.length ?? 0) - cams.length;
   return (
     <div className="panel">
@@ -253,7 +254,7 @@ export function FramingPanel({ ed }: { ed: Ed }) {
           {cams.map((c, i) => <CameraCard key={c.id} ed={ed} cam={c} index={i} />)}
         </ul>
       )}
-      {minor > 0 && <p className="muted small">{minor} short cutaways (under 2% each) use automatic framing.</p>}
+      {minor > 0 && <p className="muted small">{minor} one-off shots (seen once, usually audience close-ups) are framed automatically. To adjust one, pause on it and drag the frame on the video.</p>}
     </div>
   );
 }

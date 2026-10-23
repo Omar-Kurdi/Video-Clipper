@@ -153,6 +153,10 @@ export const api = {
   },
   speaker: (id: string) => req<[number, number, number, number?, (number | null)?][]>(`/api/lectures/${id}/speaker`),
   cameras: (id: string) => req<Cameras>(`/api/lectures/${id}/cameras`),
+  framingAt: (id: string, t: number) =>
+    req<{ camera: number | null; mode: "manual" | "lecturer" | "camera" | "none"; x: number; y: number; zoom: number | null }>(
+      `/api/lectures/${id}/framing-at?t=${t.toFixed(3)}`),
+  setFramingAt: (id: string, t: number, x: number) => req<Camera>(`/api/lectures/${id}/framing-at`, json({ t, x }, "PUT")),
   setCameraZoom: (id: string, cid: number, zoom: number | null) =>
     req<Camera>(`/api/lectures/${id}/cameras/${cid}`, json({ zoom }, "PUT")),
   setFraming: (id: string, cid: number, manual: { x: number; y: number } | null) =>

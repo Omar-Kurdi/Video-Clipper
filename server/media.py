@@ -136,29 +136,37 @@ def cameras(lid: str, report=None) -> dict:
 
 
 def save_cameras(lid: str, data: dict) -> None:
-    cameras_path(lid).write_text(json.dumps(data))
+    cameras_path(lid).write_text(json.dumps({k: v for k, v in data.items() if not k.startswith("_")}))
 
 
 def framing_track(lid: str) -> list[list[float]] | None:
-    """[time, x, y] of the intended framing (manual > lecturer > camera > centre)
-    for every analysed sample: what the in-browser preview should show."""
+    """[time, x, y, camera, zoom] of the intended framing for every analysed
+    sample (manual > lecturer > camera > centre), in that sample's own frame
+    coordinates: what the in-browser preview and the frame guide show."""
+    from shorts.cameras import to_frame
+
     p = cameras_path(lid)
     if not p.exists():
         return None
     data = json.loads(p.read_text())
+    if data.get("version") != 2:
+        return None
+    geo = tuple(data["geo"])
     by_id = {c["id"]: c for c in data["cameras"]}
     out = []
-    for t, cid, x, y in data["samples"]:
+    for t, cid, x, y, Hs in data["samples"]:
         cam = by_id.get(cid, {})
         if cam.get("manual"):
-            fx, fy = cam["manual"]["x"], cam["manual"].get("y", 0.36)
+            mx, my = cam["manual"]["x"], cam["manual"].get("y", 0.36)
+            fx, fy = to_frame(Hs, mx, my, geo) if Hs else (mx, my)
         elif x is not None:
             fx, fy = x, y
         elif cam.get("auto"):
-            fx, fy = cam["auto"]["x"], cam["auto"]["y"]
+            ax, ay = cam["auto"]["x"], cam["auto"]["y"]
+            fx, fy = to_frame(Hs, ax, ay, geo) if Hs else (ax, ay)
         else:
             fx, fy = 0.5, 0.4
-        out.append([t, fx, fy, cid, cam.get("zoom")])
+        out.append([t, round(fx, 4), round(fy, 4), cid, cam.get("zoom")])
     return out
 
 
@@ -290,24 +298,48 @@ def _sface():
     return _recognizer()
 
 
-def _framing_at(lid: str, frame: np.ndarray, W: int, H: int) -> tuple[float, float, float | None]:
-    """Same choice as the render: the camera's manual framing, else the
-    recognised lecturer, else the camera's usual framing, else the centre."""
-    p = cameras_path(lid)
-    if p.exists():
-        from shorts.cameras import framing, identify, match_camera, signature
+def framing_at_frame(lid: str, frame: np.ndarray) -> dict | None:
+    """Framing of one frame, decided exactly as the render does."""
+    from shorts.cameras import frame_framing
 
-        data = json.loads(p.read_text())
-        cam = match_camera(data, signature(frame))
-        z = cam.get("zoom") if cam else None
-        if cam and cam.get("manual"):
-            return cam["manual"]["x"] * W, cam["manual"].get("y", 0.36) * H, z
-        if data.get("reference"):
-            hit = identify(frame, _detector(W, H), _sface(), np.array(data["reference"], dtype=np.float32))
-            if hit:
-                return hit[0] * W, hit[1] * H, z
-        fr = framing(cam)
-        return (fr[0] * W, fr[1] * H, z) if fr else (W / 2, H * 0.4, z)
+    if not cameras_path(lid).exists():
+        return None
+    data = cameras(lid)
+    H, W = frame.shape[:2]
+    return frame_framing(data, frame, _detector(W, H), _sface())
+
+
+def framing_at(lid: str, t: float) -> dict:
+    meta = store.get_lecture(lid)
+    frame = _frame_at(store.source_path(lid), t, meta["width"], meta["height"])
+    fr = framing_at_frame(lid, frame) or {"camera": None, "mode": "none", "x": 0.5, "y": 0.4, "zoom": None}
+    return {"camera": None if fr["camera"] is None else int(fr["camera"]), "mode": fr["mode"],
+            "x": round(float(fr["x"]), 4), "y": round(float(fr["y"]), 4),
+            "zoom": None if fr["zoom"] is None else float(fr["zoom"])}
+
+
+def set_framing_at(lid: str, t: float, x: float) -> dict:
+    """Set the manual framing of the camera angle shown at time t from a crop
+    centre x in that frame (mapped back to the angle's reference frame)."""
+    from shorts.cameras import to_reference
+
+    meta = store.get_lecture(lid)
+    frame = _frame_at(store.source_path(lid), t, meta["width"], meta["height"])
+    fr = framing_at_frame(lid, frame)
+    if not fr or fr["camera"] is None:
+        raise ValueError("couldn't tell which camera angle is on screen here")
+    data = cameras(lid)
+    rx, ry = to_reference(fr["H"], x, fr["y"], tuple(data["geo"]))
+    cam = next(c for c in data["cameras"] if c["id"] == fr["camera"])
+    cam["manual"] = {"x": round(rx, 4), "y": round(ry, 4)}
+    save_cameras(lid, data)
+    return {k: v for k, v in cam.items() if k != "sigs"}
+
+
+def _framing_at(lid: str, frame: np.ndarray, W: int, H: int) -> tuple[float, float, float | None]:
+    fr = framing_at_frame(lid, frame)
+    if fr is not None:
+        return fr["x"] * W, fr["y"] * H, fr["zoom"]
     scale = DETECT_WIDTH / W
     _, faces = _detector(DETECT_WIDTH, round(H * scale)).detect(
         cv2.resize(frame, (DETECT_WIDTH, round(H * scale)), interpolation=cv2.INTER_AREA))

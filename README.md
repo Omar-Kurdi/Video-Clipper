@@ -31,13 +31,16 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   timeline in the middle (`I` / `O` to mark, `Enter` to add, drag to select,
   scroll to move, `Ctrl`+scroll to zoom), and the preview and settings on the
   right. Selecting in either place selects in both.
-- **Framing** – each lecture is analysed once for its camera positions and
-  the lecturer's face (face recognition), so he is found even in wide shots
-  where audience faces are bigger, and held in the same spot every time a
-  camera comes back. In the editor, drag the orange frame on the video (or a camera
-  card in the Framing tab) to set a camera by hand; it applies to every shot
-  from that camera. The CLI does the same (cached in `<video>.cameras.json`;
-  `--no-lock` to just follow the main face).
+- **Framing**: each lecture is analysed once. Camera angles are recognised
+  by matching the architecture in the picture, so a moving audience, a pan or
+  a small zoom doesn't split one angle into several. The lecturer is found by
+  face recognition, so he is framed even in wide shots where audience faces
+  are bigger, and held in the same spot every time an angle comes back.
+  Pause and drag the orange frame on the video (or a camera card in the
+  Framing tab) to set an angle by hand. It's stored relative to the scene and
+  mapped onto every shot of that angle, even if the camera moved. Each angle
+  can also have its own zoom. The CLI does the same, cached in
+  `<video>.cameras.json/.npz`; use `--no-lock` to just follow the main face.
 - Settings (pause threshold, morph/fade/jump
   cuts, caption style, name plate, zoom in or out, grade) update a live 9:16 preview;
   **Render** runs in the background and the result plays and downloads in place.

@@ -291,9 +291,16 @@ class FramingIn(BaseModel):
     zoom: float | None = None   # this camera's own zoom, or null to use the short's
 
 
+def _cameras_ready(lid: str) -> bool:
+    p = media.cameras_path(lid)
+    if not p.exists() or not p.with_suffix(".npz").exists():
+        return False
+    return json.loads(p.read_text()).get("version") == 2  # older analyses are redone
+
+
 @app.get("/api/lectures/{lid}/cameras")
 def lecture_cameras(lid: str, retry: bool = False):
-    if not media.cameras_path(lid).exists():
+    if not _cameras_ready(lid):
         job = jobs.active(lecture_id=lid, kind="cameras")
         if not job:
             last = next(iter(jobs.list(lecture_id=lid, kind="cameras")), None)
@@ -302,7 +309,7 @@ def lecture_cameras(lid: str, retry: bool = False):
             job = jobs.submit("cameras", lambda report: (media.cameras(lid, report), None)[1], lecture_id=lid)
         return {"status": "analyzing", "job": job, "cameras": []}
     data = json.loads(media.cameras_path(lid).read_text())
-    cams = [{k: v for k, v in c.items() if k != "sig"} for c in data["cameras"]]
+    cams = [{k: v for k, v in c.items() if k not in ("sig", "sigs")} for c in data["cameras"]]
     return {"status": "ready", "has_lecturer": data.get("reference") is not None, "cameras": cams}
 
 
@@ -318,7 +325,27 @@ def set_camera_framing(lid: str, cid: int, body: FramingIn):
     if "zoom" in body.model_fields_set:
         cam["zoom"] = None if body.zoom is None else max(0.6, min(1.6, float(body.zoom)))
     media.save_cameras(lid, data)
-    return {k: v for k, v in cam.items() if k != "sig"}
+    return {k: v for k, v in cam.items() if k not in ("sig", "sigs")}
+
+
+class FramingAtIn(BaseModel):
+    t: float
+    x: float  # crop centre in that frame, 0..1
+
+
+@app.get("/api/lectures/{lid}/framing-at")
+def get_framing_at(lid: str, t: float):
+    """Which camera angle is on screen at t and how the render will frame it."""
+    return media.framing_at(lid, t)
+
+
+@app.put("/api/lectures/{lid}/framing-at")
+def put_framing_at(lid: str, body: FramingAtIn):
+    """Set the framing of the angle on screen at t (from the frame on the video)."""
+    try:
+        return media.set_framing_at(lid, body.t, body.x)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/lectures/{lid}/cameras/{cid}/thumb")

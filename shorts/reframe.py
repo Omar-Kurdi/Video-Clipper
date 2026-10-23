@@ -201,9 +201,10 @@ class CropPath:
 
 
 def _lock_shots(video: Path, bounds: list[int], W: int, H: int, identity: dict) -> list[dict]:
-    """Per shot: where the lecturer is (face recognition on a few frames), and
-    the camera it belongs to (for manual framing)."""
-    from .cameras import _recognizer, framing, identify, match_camera, signature
+    """Per shot: where the lecturer is (face recognition on a few frames), the
+    camera angle it belongs to, and that angle's manual framing mapped onto
+    this shot."""
+    from .cameras import _recognizer, frame_framing, identify
 
     ref = np.array(identity["reference"], dtype=np.float32) if identity.get("reference") else None
     det = _detector(W, H)
@@ -211,25 +212,25 @@ def _lock_shots(video: Path, bounds: list[int], W: int, H: int, identity: dict) 
     cap = cv2.VideoCapture(str(video))
     out = []
     for a, b in zip(bounds[:-1], bounds[1:]):
-        hits, sig = [], None
+        hits, mid = [], None
         for q in (0.2, 0.5, 0.8):
             cap.set(cv2.CAP_PROP_POS_FRAMES, int(a + (b - a) * q))
             ok, frame = cap.read()
             if not ok:
                 continue
-            if q == 0.5 or sig is None:
-                sig = signature(frame)
+            if q == 0.5 or mid is None:
+                mid = frame
             if ref is not None:
                 hit = identify(frame, det, rec, ref)
                 if hit:
                     hits.append(hit)
-        cam = match_camera(identity, sig) if (sig is not None and identity.get("cameras")) else None
-        manual = cam.get("manual") if cam else None
         lect = (float(np.median([h[0] for h in hits])), float(np.median([h[1] for h in hits]))) if hits else None
-        auto = framing(cam) if cam else None
-        out.append({"camera": cam["id"] if cam else None, "manual": manual, "lecturer": lect,
-                     "camera_framing": auto, "found": ref is not None,
-                     "zoom": cam.get("zoom") if cam else None})
+        fr = frame_framing(identity, mid, lecturer=lect) if mid is not None else {"mode": "none", "camera": None, "zoom": None}
+        out.append({"camera": fr["camera"],
+                    "manual": {"x": fr["x"], "y": fr["y"]} if fr["mode"] == "manual" else None,
+                    "lecturer": lect,
+                    "camera_framing": (fr["x"], fr["y"]) if fr["mode"] == "camera" else None,
+                    "found": ref is not None, "zoom": fr["zoom"]})
     cap.release()
     return out
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Range } from "./api";
 import { RenderButton, TopBar, type Ed } from "./Editor";
 import { CaptionsPanel, ClipList, CutsPanel, FramingPanel, Preview, Stats, cropWidth } from "./panels";
-import { at, trackFor, zoomAt, type Track } from "./Quick";
+import { at, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
 import { clamp, fmt, normalize } from "./util";
 
@@ -108,16 +108,30 @@ export function Workspace({ ed }: { ed: Ed }) {
   const [guideDrag, setGuideDragState] = useState<number | null>(null);
   const guideRef = useRef<number | null>(null);
   const setGuideDrag = (v: number | null) => { guideRef.current = v; setGuideDragState(v); };
+  // While paused, ask the server which angle is on screen and how the render
+  // frames it (exact). While playing, use the analysed samples (approximate).
+  const [exact, setExact] = useState<{ t: number; camera: number | null; mode: string; x: number; zoom: number | null } | null>(null);
+  useEffect(() => {
+    if (playing) return;
+    const t = time;
+    const id = setTimeout(() => {
+      api.framingAt(ed.lecture.id, t).then((r) => setExact({ t, ...r })).catch(() => {});
+    }, 200);
+    return () => clearTimeout(id);
+  }, [time, playing, ed.lecture.id, ed.framingVersion]);
+  const useExact = !playing && exact && Math.abs(exact.t - time) < 0.05;
   const near = track.length ? track.reduce((b, p) => (Math.abs(p[0] - time) < Math.abs(b[0] - time) ? p : b)) : null;
-  const cam = ed.cameras?.cameras.find((c) => c.id === near?.[3]) ?? null;
-  const cw = Math.min(1, cropWidth(ed, cam?.zoom ?? zoomAt(track, time) ?? s?.zoom ?? 1));
-  const fx = guideDrag ?? (track.length ? at(track, time)[0] : 0.5);
+  const camId = useExact ? exact!.camera : near?.[3];
+  const cam = ed.cameras?.cameras.find((c) => c.id === camId) ?? null;
+  const cw = Math.min(1, cropWidth(ed, cam?.zoom ?? s?.zoom ?? 1));
+  const fx = guideDrag ?? (useExact ? exact!.x : track.length ? at(track, time)[0] : 0.5);
   const guideLeft = Math.min(1 - cw, Math.max(0, fx - cw / 2)) * 100;
-  const major = [...(ed.cameras?.cameras ?? [])].filter((c) => c.share >= 0.02).sort((a, b) => b.share - a.share);
-  const camIndex = cam ? major.findIndex((c) => c.id === cam.id) : -1;
+  const listed = [...(ed.cameras?.cameras ?? [])].filter((c) => c.count >= 2).sort((a, b) => b.count - a.count);
+  const camIndex = cam ? listed.findIndex((c) => c.id === cam.id) : -1;
+  const how = (useExact ? exact!.mode : cam?.manual ? "manual" : "lecturer");
   const guideLabel = cam
-    ? `${camIndex >= 0 ? `Camera ${camIndex + 1}` : "Cutaway"} · ${cam.manual ? "manual" : cam.has_speaker ? "on the lecturer" : "centred"} · drag to adjust`
-    : "9:16 · follows the lecturer";
+    ? `${camIndex >= 0 ? `Camera ${camIndex + 1}` : "One-off shot"} · ${how === "manual" ? "your framing" : how === "lecturer" ? "on the lecturer" : how === "camera" ? "usual position" : "centred"}${playing ? "" : " · drag to adjust"}`
+    : "9:16 frame";
   const guideX = (e: React.PointerEvent<HTMLDivElement>) => {
     const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
     return Math.min(1 - cw / 2, Math.max(cw / 2, (e.clientX - r.left) / r.width));
@@ -175,7 +189,8 @@ export function Workspace({ ed }: { ed: Ed }) {
               onPointerUp={(e) => {
                 if (guideRef.current == null || !cam) return;
                 const x = guideX(e);
-                ed.setFraming(cam.id, { x: Math.round(x * 1000) / 1000, y: cam.manual?.y ?? cam.auto?.y ?? 0.36 });
+                // set the angle on screen now, mapped onto its reference frame by the server
+                ed.setFramingAt(video.current?.currentTime ?? time, Math.round(x * 1000) / 1000);
                 setGuideDrag(null);
               }}>
               <span>{guideLabel}</span>

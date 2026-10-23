@@ -37,6 +37,7 @@ export interface Ed {
   framingVersion: number;
   setFraming: (cid: number, manual: { x: number; y: number } | null) => Promise<void>;
   setCameraZoom: (cid: number, zoom: number | null) => Promise<void>;
+  setFramingAt: (t: number, x: number) => Promise<void>;
   editSegment: (k: number, text: string | null) => Promise<void>;
   time: number;
   setTime: (t: number) => void;
@@ -189,6 +190,12 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       transcribe: async () => { await api.transcribe(lectureId).catch((e) => setError(e.message)); pollJobs(); },
       transcribeJob: jobs.find((j) => j.kind === "transcribe" && (j.status === "queued" || j.status === "running")) ?? null,
       renderedVersion, time, setTime, cameras, framingVersion,
+      setFramingAt: async (t, x) => {
+        const cam = await api.setFramingAt(lectureId, t, x).catch((e) => { setError(e.message); return null; });
+        if (!cam) return;
+        setCameras((c) => c && { ...c, cameras: c.cameras.map((y) => (y.id === cam.id ? cam : y)) });
+        setFramingVersion((v) => v + 1);
+      },
       setCameraZoom: async (cid, zoom) => {
         const cam = await api.setCameraZoom(lectureId, cid, zoom).catch((e) => { setError(e.message); return null; });
         if (!cam) return;

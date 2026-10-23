@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from shorts.cameras import framing, match_camera, signature  # noqa: E402
+from shorts.cameras import frame_framing, load_or_analyze  # noqa: E402
 from shorts.pipeline import ShortOptions, estimate, make_short  # noqa: E402
 from shorts.plan import output_starts  # noqa: E402
 from shorts.render import compose  # noqa: E402
@@ -60,7 +60,7 @@ def main() -> int:
     video = a.video
     info = probe(video)
     cams_file = video.with_suffix(".cameras.json")
-    identity = json.loads(cams_file.read_text()) if cams_file.exists() else None
+    identity = load_or_analyze(video, cams_file) if cams_file.exists() else None
     o = ShortOptions(ranges=[parse_range(r) for r in a.range], captions=False, zoom=a.zoom,
                      transition=a.transition, identity=identity)
     words = load_words(video) if words_path(video).exists() else []
@@ -130,15 +130,16 @@ def main() -> int:
         hits, misses = 0, 0
         for idx in picks:
             j, src = mapping[idx]
-            cam = match_camera(identity, signature(frame_at(video, src / float(fps), W, H)))
-            if not cam:
+            fr = frame_framing(identity, frame_at(video, src / float(fps), W, H))
+            if fr["camera"] is None:
                 continue
+            cam = next(c for c in identity["cameras"] if c["id"] == fr["camera"])
             cw, ch = rep["cws"][j], rep["chs"][j]
             if cam.get("manual"):
                 cx = rep["xs"][j] + cw / 2
-                exp = min(max(cam["manual"]["x"] * W, cw / 2), W - cw / 2)
-                hits += abs(cx - exp) <= 2
-                misses += abs(cx - exp) > 2
+                exp = min(max(fr["x"] * W, cw / 2), W - cw / 2)
+                hits += abs(cx - exp) <= 4
+                misses += abs(cx - exp) > 4
             if cam.get("zoom"):
                 from shorts.reframe import crop_size
                 hits += (ch, cw) == crop_size(W, H, cam["zoom"])

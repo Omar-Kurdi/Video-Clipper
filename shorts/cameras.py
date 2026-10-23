@@ -1,19 +1,27 @@
-"""Lecture-level camera analysis: which fixed camera positions the lecture
-cuts between, who the lecturer is, and where to frame him in each camera.
+"""Lecture-level camera analysis: which camera angles the lecture cuts
+between, who the lecturer is, and where to frame him in each angle.
 
-Lectures are usually filmed with a few fixed cameras. Framing per *camera*
-(instead of chasing the face frame by frame) keeps the lecturer in the same
-spot every time a camera comes back. The lecturer is identified by face
-recognition: the person whose face dominates the lecture (big, often) is the
-reference, and in wide shots we pick the face that matches him, not the
-biggest face (often someone in the audience).
+Framing per *camera angle* (instead of chasing the face frame by frame) keeps
+the lecturer in the same spot every time an angle comes back. Two ideas make
+that robust:
 
-Result (cameras.json):
-  {"reference": [128 floats],
-   "cameras": [{"id", "sig", "count", "share", "has_speaker",
-                "auto": {"x","y","w"} | null,          # normalised face centre/width
-                "manual": {"x","y"} | null}],          # user override, crop centre
-   "samples": [[t, camera_id, x|null, y|null]]}
+* Angles are recognised by matching the architecture in the picture (ORB
+  features + a homography), not by comparing thumbnails, so a moving
+  audience, a slight pan or a small zoom doesn't split one angle into many.
+  Every frame gets a homography to its angle's reference frame, so a framing
+  set on the reference (by dragging) lands on the same spot of the scene in
+  every shot from that angle.
+* The lecturer is identified by face recognition: the face that dominates the
+  lecture is the reference, and in wide shots we pick the face that matches
+  him, not the biggest face (often someone in the audience).
+
+Result (<video>.cameras.json, plus feature arrays in <video>.cameras.npz):
+  {"version": 2, "reference": [128 floats], "geo": [480, 270],
+   "cameras": [{"id", "sigs", "count", "share", "has_speaker",
+                "auto": {"x","y","w"} | null,   # lecturer, normalised, reference-frame coords
+                "manual": {"x","y"} | null,     # user framing (crop centre), reference-frame coords
+                "zoom": float | null}],
+   "samples": [[t, camera_id, x|null, y|null, H|null]]}   # x,y in the sample's own frame
 """
 import re
 import subprocess
@@ -35,6 +43,12 @@ SIG_W, SIG_H = 32, 18
 CAMERA_DIST = 20.0      # mean abs diff of blurred 32x18 thumbnails within one camera
 SPEAKER_COS = 0.45      # SFace cosine similarity to count as the lecturer
 MIN_GAP = 2.0           # seconds between analysed samples
+VERSION = 2
+GEO_W = 480             # feature matching works on frames scaled to this width
+MERGE_INLIERS = 40      # same angle: at least this many consistent feature matches
+LOCATE_INLIERS = 25
+MERGE_SCALE = (0.8, 1.25)   # clearly different zoom levels stay separate angles
+LOCATE_SCALE = (0.5, 2.0)
 
 
 def signature(frame: np.ndarray) -> np.ndarray:
@@ -94,12 +108,67 @@ def _keyframes(video: Path, w: int, h: int):
         proc.wait()
 
 
+_orb = None
+_bf = None
+
+
+def _features(gray: np.ndarray):
+    global _orb, _bf
+    if _orb is None:
+        _orb = cv2.ORB_create(nfeatures=1200)
+        _bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    return _orb.detectAndCompute(gray, None)
+
+
+def _geo_gray(frame: np.ndarray, gw: int, gh: int) -> np.ndarray:
+    return cv2.cvtColor(cv2.resize(frame, (gw, gh), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+
+
+def _homography(fa, fb, scale=LOCATE_SCALE):
+    """Homography taking points of image a to image b, and its inlier count."""
+    (ka, da), (kb, db) = fa, fb
+    if da is None or db is None or len(ka) < 20 or len(kb) < 20:
+        return None, 0
+    if _bf is None:
+        _features(np.zeros((8, 8), np.uint8))
+    pairs = _bf.knnMatch(da, db, k=2)
+    good = [p[0] for p in pairs if len(p) == 2 and p[0].distance < 0.75 * p[1].distance]
+    if len(good) < 15:
+        return None, 0
+    A = np.float32([ka[m.queryIdx].pt for m in good])
+    B = np.float32([kb[m.trainIdx].pt for m in good])
+    H, mask = cv2.findHomography(A, B, cv2.RANSAC, 4.0)
+    if H is None:
+        return None, 0
+    sc = float(np.sqrt(abs(np.linalg.det(H[:2, :2]))))
+    if not (scale[0] < sc < scale[1]) or abs(H[2, 0]) > 2e-3 or abs(H[2, 1]) > 2e-3:
+        return None, 0
+    return H, int(mask.sum())
+
+
+def _apply(H, x: float, y: float, gw: int, gh: int) -> tuple[float, float]:
+    """Map a normalised point through H (pixel homography in the gw x gh space)."""
+    p = H @ np.array([x * gw, y * gh, 1.0])
+    return float(p[0] / p[2] / gw), float(p[1] / p[2] / gh)
+
+
+def to_frame(H, x: float, y: float, geo) -> tuple[float, float]:
+    """Reference-frame point -> this frame (H maps this frame to the reference)."""
+    return _apply(np.linalg.inv(np.asarray(H, float).reshape(3, 3)), x, y, *geo)
+
+
+def to_reference(H, x: float, y: float, geo) -> tuple[float, float]:
+    return _apply(np.asarray(H, float).reshape(3, 3), x, y, *geo)
+
+
 def analyze(video: Path, width: int, height: int, duration: float,
-            on_progress: Callable[[float], None] | None = None, thumbs: Path | None = None) -> dict:
+            on_progress: Callable[[float], None] | None = None, thumbs: Path | None = None,
+            features: Path | None = None) -> dict:
     det = _detector(width, height)
     rec = _recognizer()
+    gw, gh = GEO_W, round(GEO_W * height / width)
     samples = []  # (t, sig, faces[(x, y, w, score, feat)])
-    frames_small = []  # downscaled frames, to pick a thumbnail per camera
+    feats, smalls = [], []
     last = -1e9
     for t, frame in _keyframes(video, width, height):
         if t - last < MIN_GAP:
@@ -117,10 +186,11 @@ def analyze(video: Path, width: int, height: int, duration: float,
                 found.append(((f[0] + f[2] / 2) / width, (f[1] + f[3] / 2) / height, f[2] / width,
                               float(f[14]), feat))
         samples.append((t, signature(frame), found))
-        if thumbs is not None:
-            frames_small.append(cv2.resize(frame, (480, round(480 * height / width)), interpolation=cv2.INTER_AREA))
+        small = cv2.resize(frame, (gw, gh), interpolation=cv2.INTER_AREA)
+        smalls.append(small)
+        feats.append(_features(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)))
         if on_progress and duration:
-            on_progress(min(0.99, t / duration))
+            on_progress(min(0.95, 0.9 * t / duration))
 
     # --- who is the lecturer: the identity with the most face area over time ---
     clusters: list[dict] = []
@@ -134,57 +204,152 @@ def analyze(video: Path, width: int, height: int, duration: float,
             else:
                 clusters.append({"sum": feat.copy(), "mean": feat.copy(), "weight": w * w * score})
     ref = max(clusters, key=lambda c: c["weight"])["mean"] if clusters else None
-
-    # --- group samples into cameras by background signature ---
-    cams: list[dict] = []
-    assign = []
-    for t, sig, faces in samples:
-        best = min(cams, key=lambda c: sig_dist(c["sig"], sig), default=None)
-        if best is not None and sig_dist(best["sig"], sig) < CAMERA_DIST:
-            best["sig"] = best["sig"] * 0.9 + sig * 0.1
-            best["members"].append(len(assign))
-            cid = best["id"]
-        else:
-            cid = len(cams)
-            cams.append({"id": cid, "sig": sig.copy(), "members": [len(assign)]})
-        speaker = None
+    speakers = []
+    for _, _, faces in samples:
+        sp = None
         if ref is not None and faces:
             x, y, w, _, feat = max(faces, key=lambda f: float(f[4] @ ref))
             if float(feat @ ref) >= SPEAKER_COS:
-                speaker = (x, y, w)
-        assign.append((t, cid, speaker))
+                sp = (x, y, w)
+        speakers.append(sp)
 
-    if thumbs is not None:
-        thumbs.mkdir(parents=True, exist_ok=True)
+    # --- 1: groups of near-identical frames (background signature) ---
+    groups: list[dict] = []
+    for k, (_, sig, _) in enumerate(samples):
+        best = min(groups, key=lambda g: sig_dist(g["sig"], sig), default=None)
+        if best is not None and sig_dist(best["sig"], sig) < CAMERA_DIST:
+            best["sig"] = best["sig"] * 0.9 + sig * 0.1
+            best["m"].append(k)
+        else:
+            groups.append({"sig": sig.copy(), "m": [k]})
+    for g in groups:
+        mean = np.mean([samples[k][1] for k in g["m"]], axis=0)
+        g["rep"] = min(g["m"], key=lambda k: sig_dist(samples[k][1], mean))
+
+    # --- 2: merge groups showing the same scene from the same angle ---
+    groups.sort(key=lambda g: -len(g["m"]))
+    cams: list[dict] = []
+    for g in groups:
+        best = None
         for c in cams:
-            # prefer a frame where the lecturer was found
-            pick = next((i for i in c["members"] if assign[i][2] is not None), c["members"][len(c["members"]) // 2])
-            cv2.imwrite(str(thumbs / f"cam{c['id']}.jpg"), frames_small[pick], [cv2.IMWRITE_JPEG_QUALITY, 82])
+            H, inl = _homography(feats[g["rep"]], feats[c["rep"]], MERGE_SCALE)
+            if H is not None and inl >= MERGE_INLIERS and (best is None or inl > best[2]):
+                best = (c, H, inl)
+        if best:
+            best[0]["groups"].append((g, best[1]))
+        else:
+            cams.append({"id": len(cams), "rep": g["rep"], "groups": [(g, np.eye(3))]})
+
+    # every sample: its angle and the homography to that angle's reference frame
+    assign: dict[int, tuple[int, np.ndarray | None]] = {}
+    for c in cams:
+        for g, Hg in c["groups"]:
+            for k in g["m"]:
+                if k == c["rep"]:
+                    assign[k] = (c["id"], np.eye(3))
+                    continue
+                H, inl = _homography(feats[k], feats[c["rep"]])
+                if H is None or inl < LOCATE_INLIERS:
+                    Hs, inl2 = _homography(feats[k], feats[g["rep"]])
+                    H = (Hg @ Hs) if Hs is not None and inl2 >= LOCATE_INLIERS else None
+                assign[k] = (c["id"], H)
+    if on_progress:
+        on_progress(0.97)
+
     out_cams = []
     for c in cams:
-        hits = [assign[i][2] for i in c["members"] if assign[i][2] is not None]
-        has = len(hits) >= max(1, 0.3 * len(c["members"]))
+        members = [k for g, _ in c["groups"] for k in g["m"]]
+        hits = []
+        for k in members:
+            sp, H = speakers[k], assign[k][1]
+            if sp is not None and H is not None:
+                hits.append((*to_reference(H, sp[0], sp[1], (gw, gh)), sp[2]))
+        has = len(hits) >= max(1, 0.3 * len(members))
         auto = None
         if has:
             xs, ys, ws = zip(*hits)
             auto = {"x": round(float(np.median(xs)), 4), "y": round(float(np.median(ys)), 4),
                     "w": round(float(np.median(ws)), 4)}
-        out_cams.append({"id": c["id"], "sig": [int(v) for v in c["sig"].round().flatten()],
-                         "count": len(c["members"]), "share": round(len(c["members"]) / max(1, len(samples)), 4),
-                         "has_speaker": has, "auto": auto, "manual": None})
+        out_cams.append({"id": c["id"], "sigs": [[int(v) for v in g["sig"].round().flatten()] for g, _ in c["groups"]],
+                         "count": len(members), "share": round(len(members) / max(1, len(samples)), 4),
+                         "has_speaker": has, "auto": auto, "manual": None, "zoom": None})
+        if thumbs is not None:
+            thumbs.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(thumbs / f"cam{c['id']}.jpg"), smalls[c["rep"]], [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+    if features is not None:
+        arrays = {}
+        for c in cams:
+            kp, des = feats[c["rep"]]
+            arrays[f"kp{c['id']}"] = np.float32([k.pt for k in kp]) if kp else np.zeros((0, 2), np.float32)
+            arrays[f"des{c['id']}"] = des if des is not None else np.zeros((0, 32), np.uint8)
+        np.savez_compressed(features, **arrays)
+
+    out_samples = []
+    for k, (t, _, _) in enumerate(samples):
+        cid, H = assign[k]
+        sp = speakers[k]
+        out_samples.append([round(float(t), 2), cid,
+                            round(float(sp[0]), 4) if sp else None, round(float(sp[1]), 4) if sp else None,
+                            [round(float(v), 6) for v in H.flatten()] if H is not None else None])
     if on_progress:
         on_progress(1.0)
-    return {"reference": [round(float(v), 5) for v in ref] if ref is not None else None,
-            "cameras": out_cams,
-            "samples": [[round(float(t), 2), cid, *((round(float(sp[0]), 4), round(float(sp[1]), 4)) if sp else (None, None))]
-                        for t, cid, sp in assign]}
+    return {"version": VERSION, "reference": [round(float(v), 5) for v in ref] if ref is not None else None,
+            "geo": [gw, gh], "cameras": out_cams, "samples": out_samples}
 
 
-def match_camera(cams: dict, sig: np.ndarray, max_dist: float = CAMERA_DIST * 1.5) -> dict | None:
-    best = min(cams["cameras"], key=lambda c: sig_dist(np.array(c["sig"]).reshape(SIG_H, SIG_W), sig), default=None)
-    if best is None or sig_dist(np.array(best["sig"]).reshape(SIG_H, SIG_W), sig) > max_dist:
+class Locator:
+    """Finds which camera angle a frame belongs to, and its homography to that
+    angle's reference frame."""
+
+    def __init__(self, data: dict, features: Path):
+        self.data = data
+        self.geo = tuple(data["geo"])
+        arr = np.load(features)
+        self.refs = {}
+        for c in data["cameras"]:
+            kp = [cv2.KeyPoint(float(x), float(y), 31) for x, y in arr[f"kp{c['id']}"]]
+            self.refs[c["id"]] = (kp, arr[f"des{c['id']}"] if len(kp) else None)
+        self.sigs = [(np.array(sg, np.float32).reshape(SIG_H, SIG_W), c) for c in data["cameras"] for sg in c["sigs"]]
+
+    def locate(self, frame: np.ndarray) -> tuple[dict, np.ndarray] | None:
+        sig = signature(frame)
+        f = _features(_geo_gray(frame, *self.geo))
+        # try angles in order of thumbnail similarity, keep the best geometric match
+        order, seen = [], set()
+        for d, c in sorted(((sig_dist(s, sig), c) for s, c in self.sigs), key=lambda x: x[0]):
+            if c["id"] not in seen:
+                seen.add(c["id"])
+                order.append((d, c))
+        best = None
+        for d, c in order[:5]:
+            H, inl = _homography(f, self.refs[c["id"]])
+            if H is not None and inl >= LOCATE_INLIERS and (best is None or inl > best[2]):
+                best = (c, H, inl)
+        # return the *current* settings of the angle (manual framing/zoom change after analysis)
+        current = {c["id"]: c for c in self.data["cameras"]}
+        if best:
+            return current.get(best[0]["id"], best[0]), best[1]
+        # no geometric match (e.g. a blurry cutaway): fall back to a very close thumbnail
+        if order and order[0][0] < CAMERA_DIST * 0.6:
+            return current.get(order[0][1]["id"], order[0][1]), np.eye(3)
         return None
-    return best
+
+
+_locators: dict = {}
+
+
+def locator(data: dict) -> Locator | None:
+    path = data.get("_features")
+    if not path or not Path(path).exists():
+        return None
+    key = (path, Path(path).stat().st_mtime)
+    if key not in _locators:
+        _locators.clear()
+        _locators[key] = Locator(data, Path(path))
+    loc = _locators[key]
+    loc.data = data  # manual framings change without re-analysis
+    return loc
 
 
 def identify(frame: np.ndarray, det, rec, ref: np.ndarray) -> tuple[float, float, float] | None:
@@ -205,6 +370,31 @@ def identify(frame: np.ndarray, det, rec, ref: np.ndarray) -> tuple[float, float
     return best
 
 
+def frame_framing(data: dict, frame: np.ndarray, det=None, rec=None,
+                  lecturer: tuple[float, float] | None = None) -> dict:
+    """How one frame is framed, exactly as the render does it: the angle's
+    manual framing (mapped onto this frame), else the recognised lecturer,
+    else the angle's usual lecturer position, else the centre. x/y are the
+    crop centre / face height, normalised to this frame."""
+    loc = locator(data)
+    found = loc.locate(frame) if loc else None
+    cam, H = found if found else (None, None)
+    geo = tuple(data.get("geo", (GEO_W, round(GEO_W * frame.shape[0] / frame.shape[1]))))
+    res = {"camera": cam["id"] if cam else None, "zoom": cam.get("zoom") if cam else None, "H": H}
+    if cam and cam.get("manual"):
+        x, y = to_frame(H, cam["manual"]["x"], cam["manual"].get("y", 0.36), geo)
+        return {**res, "mode": "manual", "x": x, "y": y}
+    if lecturer is None and data.get("reference") and det is not None:
+        hit = identify(frame, det, rec, np.array(data["reference"], dtype=np.float32))
+        lecturer = hit[:2] if hit else None
+    if lecturer:
+        return {**res, "mode": "lecturer", "x": float(lecturer[0]), "y": float(lecturer[1])}
+    if cam and cam.get("auto"):
+        x, y = to_frame(H, cam["auto"]["x"], cam["auto"]["y"], geo)
+        return {**res, "mode": "camera", "x": x, "y": y}
+    return {**res, "mode": "none", "x": 0.5, "y": 0.4}
+
+
 def framing(cam: dict | None) -> tuple[float, float] | None:
     """Where this camera should be framed (crop centre x, face y), if known."""
     if cam is None:
@@ -218,14 +408,19 @@ def framing(cam: dict | None) -> tuple[float, float] | None:
 
 def load_or_analyze(video: Path, cache: Path, on_progress: Callable[[float], None] | None = None,
                     thumbs: Path | None = None) -> dict:
-    """Cached camera analysis."""
+    """Cached camera analysis (re-done when the format has changed)."""
     import json
 
-    if cache.exists():
-        return json.loads(cache.read_text())
+    features = cache.with_suffix(".npz")
+    if cache.exists() and features.exists():
+        data = json.loads(cache.read_text())
+        if data.get("version") == VERSION:
+            data["_features"] = str(features)
+            return data
     from .util import probe
 
     info = probe(video)
-    data = analyze(video, info.width, info.height, info.duration, on_progress, thumbs)
+    data = analyze(video, info.width, info.height, info.duration, on_progress, thumbs, features)
     cache.write_text(json.dumps(data))
+    data["_features"] = str(features)
     return data
