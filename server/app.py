@@ -45,11 +45,16 @@ def _free_gb() -> float:
 
 @app.on_event("startup")
 def _cleanup() -> None:
-    """Remove work files left by a render that was interrupted (crash, reboot)."""
+    """Tidy up after an interrupted run (crash, reboot, server stopped mid-job):
+    render work files, preview clips, and transcriptions left marked running."""
     for d in store.DATA.glob("lectures/*/renders/shorts-*"):
         shutil.rmtree(d, ignore_errors=True)
-    for f in store.DATA.glob("lectures/*/renders/*.part.mp4"):
+    for f in [*store.DATA.glob("lectures/*/renders/*.part.mp4"), *store.DATA.glob("lectures/*/tmp/*")]:
         f.unlink(missing_ok=True)
+    for meta in store.list_lectures():
+        if meta.get("transcript") == "running":  # no job survives a restart
+            done = words_path(store.lecture_dir(meta["id"]) / meta["source"]).exists()
+            store.update_lecture(meta["id"], transcript="ready" if done else "none")
 jobs = Jobs()
 WEB = Path(__file__).resolve().parent.parent / "web" / "dist"
 
@@ -143,11 +148,22 @@ def _analyze_job(lid: str) -> dict:
     return jobs.submit("analyze", run, lecture_id=lid)
 
 
+def _disk(lid: str) -> dict:
+    """Bytes the lecture's folder holds, and the original file it links to (if any)."""
+    d = store.lecture_dir(lid)
+    size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file() and not f.is_symlink())
+    src = d / (store.get_lecture(lid).get("source") or "")
+    linked = src.resolve() if src.is_symlink() and src.resolve().is_file() else None
+    return {"bytes": size, "linked": str(linked) if linked else None,
+            "linked_bytes": linked.stat().st_size if linked else 0}
+
+
 def _lecture_out(meta: dict) -> dict:
     lid = meta["id"]
     job = jobs.active(lecture_id=lid)
     return {**meta, "job": job, "shorts": len(store.list_shorts(lid)),
-            "has_transcript": words_path(store.lecture_dir(lid) / meta["source"]).exists()}
+            "has_transcript": words_path(store.lecture_dir(lid) / meta["source"]).exists(),
+            "disk": _disk(lid)}
 
 
 # ---------- lectures ----------
@@ -204,10 +220,25 @@ def lecture(lid: str):
     return _lecture_out(store.get_lecture(lid))
 
 
+# what the command-line tool caches next to a video (also removed when the original is deleted)
+SIDECARS = (".words.json", ".transcript.txt", ".cameras.json", ".cameras.npz", ".speaker.json")
+
+
 @app.delete("/api/lectures/{lid}")
-def delete_lecture(lid: str):
+def delete_lecture(lid: str, original: bool = False):
+    """Delete the lecture: its folder (video, renders, transcript, analysis).
+    original=true also deletes the video file it links to on this computer,
+    with the files the command-line tool keeps next to it."""
+    running = jobs.active(lecture_id=lid)
+    if running:
+        raise HTTPException(409, f"wait for the {running['kind']} job to finish before deleting")
+    freed = _disk(lid)
+    if original and freed["linked"]:
+        target = Path(freed["linked"])
+        for f in [target] + [target.with_suffix(s) for s in SIDECARS] + list(target.parent.glob(target.stem + ".translation.*.json")):
+            f.unlink(missing_ok=True)
     shutil.rmtree(store.lecture_dir(lid), ignore_errors=True)
-    return {"ok": True}
+    return {"ok": True, "freed": freed["bytes"] + (freed["linked_bytes"] if original else 0)}
 
 
 @app.get("/api/lectures/{lid}/video")

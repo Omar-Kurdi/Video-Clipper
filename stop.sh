@@ -5,6 +5,18 @@ cd "$(dirname "$0")"
 HERE=$(pwd -P)
 PID_FILE=.run/server.pid
 
+# don't throw away work in progress (a transcription, a render...) unless asked to
+if [ "${1:-}" != "-f" ]; then
+  url=$(grep -ao 'http://[^ ]*' .run/server.log 2>/dev/null | head -1)
+  busy=$([ -n "$url" ] && curl -s --max-time 2 "$url/api/jobs" | python3 -c \
+    "import json,sys; print(', '.join(sorted({j['kind'] for j in json.load(sys.stdin) if j['status'] in ('queued','running')})))" 2>/dev/null)
+  if [ -n "$busy" ]; then
+    echo "Not stopping: the app is still working ($busy)."
+    echo "Wait for it to finish, or run ./stop.sh -f to stop anyway (that work is lost)."
+    exit 1
+  fi
+fi
+
 pids=()
 [ -f "$PID_FILE" ] && pids+=("$(cat "$PID_FILE")")
 # any `python -m server` running from this folder
