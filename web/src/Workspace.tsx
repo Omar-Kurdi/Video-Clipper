@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, type Range } from "./api";
+import { api, type Range, type Word } from "./api";
 import { Confirm } from "./Confirm";
 import { TopBar, type Ed } from "./Editor";
 import { CaptionsPanel, ClipList, CutsPanel, FramingPanel, Preview, Stats, cropWidth } from "./panels";
@@ -268,6 +268,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [fixing, setFixing] = useState<number | null>(null);
 
   const words = useMemo(() => tr?.words ?? [], [tr]);
   const wordSeg = useMemo(() => {
@@ -331,7 +332,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
   const onMouseUp = (e: React.MouseEvent) => {
     if (!tr || editing != null) return;
     const target = e.target as HTMLElement;
-    if (target.closest(".ts, .para-tools, .seg-edit")) return;
+    if (target.closest(".ts, .para-tools, .seg-edit, .word-fix")) return;
     const sx = window.getSelection();
     if (sx && !sx.isCollapsed && sx.rangeCount) {
       const inside = [...(article.current?.querySelectorAll("[data-i]") ?? [])].filter((el) => sx.containsNode(el, true));
@@ -344,6 +345,9 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
     }
     const wEl = target.closest("[data-i]");
     const pEl = target.closest("[data-seg]");
+    // a doubtful word: also offer the other readings
+    const wi = wEl ? Number(wEl.getAttribute("data-i")) : null;
+    setFixing(wi != null && showDoubt && words[wi]?.flag ? wi : null);
     const k = wEl ? wordSeg[Number(wEl.getAttribute("data-i"))] : pEl ? Number(pEl.getAttribute("data-seg")) : null;
     if (k == null) return;
     const r = segRange(k);
@@ -418,13 +422,14 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
         if (src) parts.push(<SourceBadge key={`b${i}`} src={src} />);
         const mk = marks.kind.get(i);
         const cls = [inShort(mid) ? "in" : "", hitSet.has(i) ? "hit" : "", inSel(mid) ? "picked" : "",
-          mk === "quran" ? "qw" : mk === "hadith" ? "hw" : "", showDoubt && w.flag && !seg.edited ? `fl-${w.flag}` : ""].join(" ").trim();
+          mk === "quran" ? "qw" : mk === "hadith" ? "hw" : "", showDoubt && w.flag ? `fl-${w.flag}` : ""].join(" ").trim();
         const tip = w.spoken ? `heard as: ${w.spoken}`
-          : showDoubt && w.flag === "doubt" ? `Likely wrong: the other recognisers heard ${(w.alts ?? []).join(" / ") || "nothing here"}`
-          : showDoubt && w.flag === "voted" ? `Changed: two recognisers agreed on this; the first reading was ${(w.alts ?? []).join(" / ")}`
+          : showDoubt && w.flag === "doubt" ? `Likely wrong: the other recognisers heard ${(w.alts ?? []).join(" / ") || "nothing here"}. Click to fix`
+          : showDoubt && w.flag === "voted" ? `Changed: two recognisers agreed on this; the first reading was ${(w.alts ?? []).join(" / ")}. Click to check`
           : showDoubt && w.flag === "gemini" ? `Changed by Gemini (${w.why ?? "proofreading"}); was ${(w.alts ?? [])[0] ?? "?"}`
           : undefined;
-        parts.push(<span key={i} data-i={i} className={cls || undefined} title={tip}>{w.w}</span>);
+        parts.push(<span key={i} data-i={i} className={cls || undefined} title={fixing === i ? undefined : tip}>{w.w}</span>);
+
       }
       const whole = sel && segRange(k)[0] >= sel[0] - 0.01 && segRange(k)[1] <= sel[1] + 0.01;
       const [ga, gb] = segRange(k);
@@ -436,6 +441,10 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
           <button type="button" className={`ts ${whole ? "sel" : paraIn ? "in" : ""}`} dir="ltr" onClick={() => { seek(seg.s); play(); }} aria-label={`Play from ${fmt(seg.s)}`}>{fmt(seg.s)}</button>
           <div className="para-body">
           <p>{parts}{seg.edited && <span className="edited-tag" dir="ltr">edited</span>}</p>
+          {fixing != null && fixing >= seg.w0 && fixing < seg.w1 && tr.words[fixing].flag && (
+            <WordFix word={tr.words[fixing]} onClose={() => setFixing(null)}
+              onPick={(text) => { const i = fixing; setFixing(null); ed.editWord(i, text); }} />
+          )}
           {trSeg && (editingTr === k ? (
             <div className="seg-edit tr-edit" onDoubleClick={(e) => e.stopPropagation()} onMouseUp={(e) => e.stopPropagation()}>
               <textarea dir={ed.translationLang === "ar" ? "rtl" : "ltr"} lang={ed.translationLang} value={trDraft} autoFocus
@@ -468,7 +477,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel, editing, draft, saving, marks, showTr, ed.translation, editingTr, trDraft, showDoubt]);
+  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel, editing, draft, saving, marks, showTr, ed.translation, editingTr, trDraft, showDoubt, fixing]);
 
   const lang = tr?.language ?? ed.lecture.language ?? "ar";
   const rtl = ["ar", "fa", "ur", "he"].includes(lang);
@@ -523,6 +532,46 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
   );
 }
 
+
+/**
+ * The other readings of a word the recognisers disagreed on, one click each,
+ * or keep it as it is. Shown under the word when it's clicked.
+ */
+function WordFix({ word, onPick, onClose }: { word: Word; onPick: (text: string | null) => void; onClose: () => void }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector("button")?.focus();
+    const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [onClose]);
+  const alts = (word.alts ?? []).filter((a) => a.trim() && a !== word.w);
+  const doubt = word.flag === "doubt";
+  const gemini = word.flag === "gemini";
+  return (
+    <span className="word-fix" ref={ref} dir="ltr" role="group" aria-label={`Fix “${word.w}”`}
+      onMouseUp={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+      <b className={doubt ? "bad-reading" : "voted-reading"}>
+        {doubt ? "Likely wrong" : gemini ? "Changed by Gemini" : "Changed by majority"}: <span className="reading" dir="auto">{word.w}</span>
+      </b>
+      <span>
+        {doubt
+          ? alts.length ? "The other recognisers heard:" : "The other recognisers heard nothing here."
+          : gemini ? `${word.why ?? "Proofreading"}. It was:`
+          : "Two recognisers agreed on this. The first reading was:"}
+      </span>
+      <span className="word-fix-picks">
+        {alts.map((a) => (
+          <button key={a} type="button" className="btn small reading" dir="auto" onClick={() => onPick(a)}>{a}</button>
+        ))}
+        {doubt && !alts.length && <button type="button" className="btn small" onClick={() => onPick("")}>Remove this word</button>}
+        <button type="button" className="btn small ghost" onClick={() => onPick(null)}>Keep <span className="reading" dir="auto">{word.w}</span></button>
+      </span>
+    </span>
+  );
+}
 
 function SourceBadge({ src }: { src: import("./api").Source }) {
   const [open, setOpen] = useState(false);

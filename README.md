@@ -41,6 +41,8 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   under the transcript and video (`I` / `O` to mark, `Enter` to add, drag to
   select, scroll to move, `Ctrl`+scroll to zoom). Shorts are tabs in the top
   bar, next to the Render button. Selecting in either place selects in both.
+  Words the recognisers disagreed on are underlined; click one to pick one of
+  the other readings (or keep it) in one click. The word keeps its timing.
   What's in the short is shown in red everywhere: transcript, 9:16 frame and
   timeline.
 - **Framing**: each lecture is analysed once. Camera angles are recognised

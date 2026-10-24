@@ -261,6 +261,20 @@ def edit_transcript_segment(lid: str, k: int, body: SegmentEditIn):
         raise HTTPException(400, str(e))
 
 
+class WordEditIn(BaseModel):
+    text: str | None = None  # null = keep the word as recognised (clears the doubt mark)
+
+
+@app.put("/api/lectures/{lid}/transcript/words/{i}")
+def edit_transcript_word(lid: str, i: int, body: WordEditIn):
+    try:
+        return media.edit_word(lid, i, body.text)
+    except IndexError:
+        raise HTTPException(404, "no such word")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/lectures/{lid}/transcribe")
 def lecture_transcribe(lid: str, engine: str = "tashkeel"):
     meta = store.get_lecture(lid)
