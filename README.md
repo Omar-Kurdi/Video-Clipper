@@ -30,15 +30,19 @@ long the short is. Encoding uses the GPU (NVENC) when available; otherwise a
 light CPU setting is used, and the render log says which. To run in the foreground instead:
 `python -m server`.
 
-- **Landing / library** – import a lecture from a YouTube link, an upload, or a
-  file already on this computer (linked, not copied). Each lecture is analysed
-  once: waveform, pauses, thumbnail.
-- **Editor** – one screen: the transcript on the left (search; click a
+- **Library** (the home page) – paste a YouTube link or a file path already on
+  this computer (linked, not copied) into one field, or drop a video anywhere on
+  the page. Each lecture is analysed once: waveform, pauses, thumbnail. Each
+  lecture lists its shorts; click one to open it.
+- **Editor** – one screen, left to right: the transcript (search; click a
   sentence to select it, shift+click to extend, double-click to correct the
-  text, and corrections are used in the captions), the video and waveform
-  timeline in the middle (`I` / `O` to mark, `Enter` to add, drag to select,
-  scroll to move, `Ctrl`+scroll to zoom), and the preview and settings on the
-  right. Selecting in either place selects in both.
+  text, and corrections are used in the captions), the video, then the preview
+  and settings (clips, cuts, captions, framing). The waveform timeline runs
+  under the transcript and video (`I` / `O` to mark, `Enter` to add, drag to
+  select, scroll to move, `Ctrl`+scroll to zoom). Shorts are tabs in the top
+  bar, next to the Render button. Selecting in either place selects in both.
+  What's in the short is shown in red everywhere: transcript, 9:16 frame and
+  timeline.
 - **Framing**: each lecture is analysed once. Camera angles are recognised
   by matching the architecture in the picture, so a moving audience, a pan or
   a small zoom doesn't split one angle into several. The lecturer is found by

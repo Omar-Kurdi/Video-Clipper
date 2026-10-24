@@ -16,10 +16,30 @@ interface Props {
   onSelect: (r: Range | null) => void;
 }
 
+// the editor's inks (see styles.css): red is what's in the short, hatching is a selection not added yet
 const C = {
-  bg: "#15181B", wave: "#5D6670", waveSel: "#F2B544", pause: "#2A2F35", range: "rgba(242,181,68,0.22)",
-  rangeEdge: "#F2B544", sel: "rgba(111,182,255,0.22)", selEdge: "#6FB6FF", head: "#FFFFFF", tick: "#6E7680",
+  bg: "#141D19", wave: "#55625B", waveSel: "#EF5A43", pause: "#0F1613", range: "rgba(239,90,67,0.12)",
+  rangeEdge: "#EF5A43", hatch: "rgba(227,232,228,0.16)", selEdge: "#E3E8E4", head: "#FFFFFF", tick: "#93A09A",
+  overBg: "#0F1613", overWave: "#2F3B36", overBox: "#C2CBC6",
 };
+
+/** Pencil hatching for the pending selection. */
+let hatchTile: HTMLCanvasElement | null = null;
+function hatch(ctx: CanvasRenderingContext2D) {
+  if (!hatchTile) {
+    hatchTile = document.createElement("canvas");
+    hatchTile.width = hatchTile.height = 6;
+    const t = hatchTile.getContext("2d")!;
+    t.strokeStyle = C.hatch;
+    t.lineWidth = 1.5;
+    t.beginPath();
+    t.moveTo(0, 6); t.lineTo(6, 0);
+    t.moveTo(-1, 1); t.lineTo(1, -1);
+    t.moveTo(5, 7); t.lineTo(7, 5);
+    t.stroke();
+  }
+  return ctx.createPattern(hatchTile, "repeat")!;
+}
 
 function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -53,7 +73,7 @@ export function Timeline(p: Props) {
   const [wrap, W] = useWidth<HTMLDivElement>();
   const main = useRef<HTMLCanvasElement>(null);
   const over = useRef<HTMLCanvasElement>(null);
-  const H = 120, OH = 26;
+  const H = 132, OH = 24;
   const [v0, v1] = p.view;
   const xOf = (t: number) => ((t - v0) / (v1 - v0)) * W;
   const tOf = (x: number) => v0 + (x / W) * (v1 - v0);
@@ -65,12 +85,12 @@ export function Timeline(p: Props) {
     const ctx = setup(cv, W, H);
     ctx.fillStyle = C.bg;
     ctx.fillRect(0, 0, W, H);
-    const top = 18, bot = H - 6, mid = (top + bot) / 2, amp = (bot - top) / 2;
+    const top = 32, bot = H - 6, mid = (top + bot) / 2, amp = (bot - top) / 2;
 
     // ruler
     const step = tickStep(v1 - v0, W);
     ctx.fillStyle = C.tick;
-    ctx.font = "11px 'IBM Plex Mono', monospace";
+    ctx.font = "10px 'Spline Sans Mono', monospace";
     for (let t = Math.ceil(v0 / step) * step; t < v1; t += step) {
       const x = xOf(t);
       ctx.fillRect(x, 0, 1, 6);
@@ -82,15 +102,20 @@ export function Timeline(p: Props) {
       ctx.fillStyle = C.pause;
       ctx.fillRect(xOf(a), top, Math.max(1, xOf(b) - xOf(a)), bot - top);
     }
-    // short's ranges
-    for (const [a, b] of p.ranges) {
-      if (b < v0 || a > v1) continue;
+    // short's ranges: a faint wash and a red track along the top, numbered in order
+    ctx.font = "500 10px 'Spline Sans Mono', monospace";
+    p.ranges.forEach(([a, b], i) => {
+      if (b < v0 || a > v1) return;
       ctx.fillStyle = C.range;
       ctx.fillRect(xOf(a), top, xOf(b) - xOf(a), bot - top);
       ctx.fillStyle = C.rangeEdge;
-      ctx.fillRect(xOf(a), top, 2, bot - top);
-      ctx.fillRect(xOf(b) - 2, top, 2, bot - top);
-    }
+      ctx.fillRect(xOf(a), top - 14, Math.max(2, xOf(b) - xOf(a)), 11);
+      if (xOf(b) - xOf(a) > 16) {
+        ctx.fillStyle = "#1A0703";
+        ctx.fillText(String(i + 1), Math.max(0, xOf(a)) + 4, top - 5);
+      }
+    });
+    ctx.font = "10px 'Spline Sans Mono', monospace";
     // waveform
     if (p.peaks) {
       const { rate, peaks } = p.peaks;
@@ -108,11 +133,16 @@ export function Timeline(p: Props) {
     // pending selection
     if (p.selection) {
       const [a, b] = p.selection;
-      ctx.fillStyle = C.sel;
+      ctx.fillStyle = hatch(ctx);
       ctx.fillRect(xOf(a), top - 4, xOf(b) - xOf(a), bot - top + 8);
+      ctx.strokeStyle = C.selEdge;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(xOf(a) + 0.5, top - 3.5, xOf(b) - xOf(a) - 1, bot - top + 7);
+      ctx.setLineDash([]);
       ctx.fillStyle = C.selEdge;
-      ctx.fillRect(xOf(a) - 1, top - 4, 3, bot - top + 8);
-      ctx.fillRect(xOf(b) - 2, top - 4, 3, bot - top + 8);
+      ctx.fillRect(xOf(a) - 1, mid - 8, 3, 16);
+      ctx.fillRect(xOf(b) - 2, mid - 8, 3, 16);
     }
     // playhead
     ctx.fillStyle = C.head;
@@ -124,13 +154,13 @@ export function Timeline(p: Props) {
     const cv = over.current;
     if (!cv || !p.duration) return;
     const ctx = setup(cv, W, OH);
-    ctx.fillStyle = "#101214";
+    ctx.fillStyle = C.overBg;
     ctx.fillRect(0, 0, W, OH);
     const X = (t: number) => (t / p.duration) * W;
     if (p.peaks) {
       const { rate, peaks } = p.peaks;
       const per = peaks.length / W;
-      ctx.fillStyle = "#3A4148";
+      ctx.fillStyle = C.overWave;
       for (let x = 0; x < W; x++) {
         let m = 0;
         for (let i = Math.floor(x * per); i < Math.floor((x + 1) * per); i++) m = Math.max(m, peaks[i] ?? 0);
@@ -141,7 +171,7 @@ export function Timeline(p: Props) {
     }
     ctx.fillStyle = C.rangeEdge;
     for (const [a, b] of p.ranges) ctx.fillRect(X(a), OH - 4, Math.max(2, X(b) - X(a)), 4);
-    ctx.strokeStyle = "#C9CED4";
+    ctx.strokeStyle = C.overBox;
     ctx.lineWidth = 1;
     ctx.strokeRect(X(v0) + 0.5, 0.5, Math.max(4, X(v1) - X(v0)) - 1, OH - 1);
     ctx.fillStyle = C.head;
