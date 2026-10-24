@@ -102,6 +102,31 @@ asr = [{"w": w, "s": float(i), "e": i + 0.9} for i, w in enumerate("ويقال �
 out = align(asr, "ويقال بالزاي الرجز ويقال بالسين رجز")
 check("each word lands on its own Whisper word", [w["src"] for w in out] == [0, 1, 2, 3, 4, 5], [(w["w"], w["src"]) for w in out])
 
+# ---------- Gemini proofreading (offline: marking and applying) ----------
+
+from shorts.proofread import _marked, apply as apply_proofread  # noqa: E402
+
+d = transcript("قال صلى الله عليه وسلم اي وسوسة هو", **{"6": {"flag": "doubt", "alts": ["وسوسته"]},
+                                                       "7": {"flag": "doubt"}})
+text, ids = _marked(d, 0, 100)
+check("only doubtful words are marked", ids == {1: 6, 2: 7} and "[[1: وسوسة | heard also: وسوسته]]" in text, text)
+apply_proofread(d, [{"i": 6, "word": "وسوستُه", "reason": "audio", "model": "m"},
+                    {"i": 7, "word": "هو", "reason": "same", "model": "m"}])
+check("a changed word keeps its old reading", d["words"][6]["w"] == "وسوستُه" and d["words"][6]["alts"][0] == "وسوسة"
+      and d["words"][6]["flag"] == "gemini", d["words"][6])
+check("a confirmed word loses its doubt", "flag" not in d["words"][7] and d["words"][7]["checked"] == "gemini", d["words"][7])
+
+# Gemini's answer for «هو» covers «وسوسة» before it: one word, not «وسوسة وسوستَه»
+d = transcript("ويذهب عنكم رجز الشيطان اي وسوسة هو وليربط", **{"6": {"flag": "doubt"}})
+apply_proofread(d, [{"i": 6, "word": "وِسْوَسَتَهُ", "reason": "audio", "model": "m"}])
+check("a word misheard as two is merged", [w["w"] for w in d["words"]][4:7] == ["اي", "وِسْوَسَتَهُ", "وليربط"],
+      [w["w"] for w in d["words"]])
+
+d = transcript("اي وسوسة هو وليربط", **{"2": {"flag": "doubt"}})
+apply_proofread(d, [{"i": 2, "word": "ـهُ", "reason": "audio", "model": "m"}])
+check("a suffix answer («ـهُ») joins the word before, ة -> ت", [w["w"] for w in d["words"]] == ["اي", "وسوستهُ", "وليربط"],
+      [w["w"] for w in d["words"]])
+
 # ---------- re-checking is stable ----------
 
 d = annotate(transcript("قال ربنا سبحانه والرجز فاهجر ولما وقع عليهم الرجز قالوا يا موسى ادع لنا ربك"))

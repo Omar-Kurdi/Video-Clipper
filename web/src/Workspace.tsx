@@ -421,6 +421,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
         const tip = w.spoken ? `heard as: ${w.spoken}`
           : showDoubt && w.flag === "doubt" ? `Likely wrong: the other recognisers heard ${(w.alts ?? []).join(" / ") || "nothing here"}`
           : showDoubt && w.flag === "voted" ? `Changed: two recognisers agreed on this; the first reading was ${(w.alts ?? []).join(" / ")}`
+          : showDoubt && w.flag === "gemini" ? `Changed by Gemini (${w.why ?? "proofreading"}); was ${(w.alts ?? [])[0] ?? "?"}`
           : undefined;
         parts.push(<span key={i} data-i={i} className={cls || undefined} title={tip}>{w.w}</span>);
       }
@@ -570,6 +571,12 @@ function TranscriptInfo({ ed, showTr, setShowTr }: { ed: Ed; showTr: boolean; se
         }}>Upgrade to accurate Arabic</button>
       )}
       {ed.transcribeJob && <span className="small">Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>}
+      {ed.gemini && !ed.transcribeJob && tr.words.some((w) => w.flag === "doubt" || w.flag === "voted") && (
+        ed.proofreadJob ? <span className="small">Gemini is proofreading…</span> : (
+          <button type="button" className="btn small" title="Send the audio and the transcript to Gemini (Google), which checks only the underlined words. On Google's free tier, what you send may be used to improve Google's products."
+            onClick={() => ed.proofread()}>Proofread doubtful words with Gemini</button>
+        ))}
+      {ed.proofreadFailed && !ed.proofreadJob && <span className="small err-text" title={ed.proofreadFailed.message}>Gemini: {ed.proofreadFailed.message.slice(0, 80)}</span>}
       <span className="tr-translate">
         {ed.translateJob ? (
           <span className="small">Translating… {Math.round(ed.translateJob.progress * 100)}%</span>

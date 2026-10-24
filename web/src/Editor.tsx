@@ -37,6 +37,10 @@ export interface Ed {
   translation: Translation | null;
   translate: () => Promise<void>;
   editTranslation: (k: number, text: string) => Promise<void>;
+  gemini: boolean;  // a Gemini key is set on the server
+  proofread: () => Promise<void>;
+  proofreadJob: Job | null;
+  proofreadFailed: Job | null;
   translateJob: Job | null;
   renderedVersion: number;
   cameras: Cameras | null;
@@ -61,6 +65,8 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   const [shorts, setShorts] = useState<Short[]>([]);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [translation, setTranslation] = useState<Translation | null>(null);
+  const [gemini, setGemini] = useState(false);
+  useEffect(() => { api.features().then((f) => setGemini(f.gemini)).catch(() => {}); }, []);
   const [waveform, setWaveform] = useState<Ed["waveform"]>(null);
   const [speech, setSpeech] = useState<Range[]>([]);
   const [styles, setStyles] = useState<Styles | null>(null);
@@ -124,6 +130,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
         if (j.status === "done" && before && before.status !== "done") {
           if (j.kind === "transcribe") { loadTranscript(); api.lecture(lectureId).then(setLecture); }
           if (j.kind === "translate") loadTranslation();
+          if (j.kind === "proofread") loadTranscript();
           if (j.kind === "cameras") { loadCameras(); setFramingVersion((v) => v + 1); }
           if (j.kind === "render") {
             setRenderedVersion(Date.now());
@@ -203,6 +210,10 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       transcribe: async (engine = "tashkeel") => { await api.transcribe(lectureId, engine).catch((e) => setError(e.message)); pollJobs(); },
       transcribeJob: jobs.find((j) => j.kind === "transcribe" && (j.status === "queued" || j.status === "running")) ?? null,
       translationLang, translation,
+      gemini,
+      proofread: async () => { await api.proofread(lectureId).catch((e) => setError(e.message)); pollJobs(); },
+      proofreadJob: jobs.find((j) => j.kind === "proofread" && (j.status === "queued" || j.status === "running")) ?? null,
+      proofreadFailed: jobs.find((j) => j.kind === "proofread")?.status === "error" ? jobs.find((j) => j.kind === "proofread")! : null,
       editTranslation: async (k, text) => {
         const t = await api.editTranslation(lectureId, translationLang, k, text).catch((e) => { setError(e.message); return null; });
         if (t) setTranslation(t);
@@ -234,7 +245,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       },
     };
   }, [lecture, visible, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
-    renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang]);
+    renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang, gemini]);
 
   if (error && !lecture) return <div className="fatal"><p>{error}</p><a href="#/">Back to library</a></div>;
   if (!ed) return <div className="fatal"><p>Loading…</p></div>;

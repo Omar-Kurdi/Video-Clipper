@@ -21,3 +21,6 @@ web/dist/
 .claude/
 .run/
 *.cameras.json
+# secrets (API keys)
+.env
+.env.local

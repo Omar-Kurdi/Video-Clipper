@@ -2,7 +2,7 @@ export type Range = [number, number];
 
 export interface Job {
   id: string;
-  kind: "download" | "analyze" | "transcribe" | "translate" | "render" | "cameras";
+  kind: "download" | "analyze" | "transcribe" | "translate" | "proofread" | "render" | "cameras";
   status: "queued" | "running" | "done" | "error";
   progress: number;
   stage: string;
@@ -92,8 +92,10 @@ export interface Estimate {
 export interface Word {
   w: string; s: number; e: number; quran?: string; spoken?: string;
   /** recognisers disagreed: "doubt" = no other model heard this word; "voted" = replaced by what two others heard */
-  flag?: "doubt" | "voted";
-  alts?: string[];  // what the other recognisers heard (or, for "voted", the original reading)
+  flag?: "doubt" | "voted" | "gemini";  // "gemini": changed by Gemini proofreading (reason in why)
+  alts?: string[];  // what the other recognisers heard (or, for "voted"/"gemini", the original reading)
+  why?: string;
+  checked?: string;  // a doubtful word Gemini confirmed
 }
 export interface Source {
   type: "quran" | "hadith";
@@ -175,6 +177,8 @@ export const api = {
   transcript: (id: string) => req<Transcript>(`/api/lectures/${id}/transcript`),
   editSegment: (id: string, k: number, text: string | null) =>
     req<Transcript>(`/api/lectures/${id}/transcript/segments/${k}`, json({ text }, "PUT")),
+  features: () => req<{ gemini: boolean }>("/api/features"),
+  proofread: (id: string) => req<Job>(`/api/lectures/${id}/proofread`, { method: "POST" }),
   translation: (id: string, lang: string) => req<Translation>(`/api/lectures/${id}/translation/${lang}`),
   editTranslation: (id: string, lang: string, k: number, text: string) =>
     req<Translation>(`/api/lectures/${id}/translation/${lang}/segments/${k}`, json({ text }, "PUT")),
