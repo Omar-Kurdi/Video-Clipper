@@ -64,7 +64,12 @@ export function VolumeControl({ getMedia }: { getMedia: () => (HTMLMediaElement 
     <div className="vol">
       <button type="button" className="icon vol-mute" aria-label={silent ? "Unmute" : "Mute"} title={silent ? "Unmute" : "Mute"}
         onClick={() => setVolume({ level: v.level === 0 ? 0.7 : v.level, muted: !silent })}>
-        {silent ? "🔇" : v.level < 0.5 ? "🔉" : "🔊"}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor" />
+          {silent ? <path d="M17 9l5 6M22 9l-5 6" /> : <>
+            <path d="M16.5 9.5a3.5 3.5 0 010 5" />{v.level >= 0.5 && <path d="M19 7a7 7 0 010 10" />}
+          </>}
+        </svg>
       </button>
       <input type="range" min={0} max={1} step={0.02} value={v.muted ? 0 : v.level} aria-label="Volume"
         title={`Volume ${Math.round((v.muted ? 0 : v.level) * 100)}%`}

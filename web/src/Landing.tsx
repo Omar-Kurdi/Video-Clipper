@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import { api, type Lecture } from "./api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, type Lecture, type Short } from "./api";
+import { Confirm } from "./Confirm";
+import { Mark } from "./Mark";
 import { go } from "./main";
-import { fmt, useInterval } from "./util";
+import { fmt, normalize, useInterval } from "./util";
 
-type Source = "link" | "file" | "path";
+const LANG_NAME: Record<string, string> = { ar: "Arabic", en: "English" };
+const isLink = (v: string) => /^https?:\/\//i.test(v) || /(^|\.)(youtube\.com|youtu\.be)\//i.test(v);
 
 function statusText(l: Lecture): string {
   if (l.job) {
@@ -12,35 +15,44 @@ function statusText(l: Lecture): string {
   }
   if (l.status === "error") return "Import failed";
   if (l.status !== "ready") return l.status;
-  return l.has_transcript ? "Ready · transcript" : "Ready · no transcript";
+  return l.has_transcript ? "transcript ready" : "no transcript yet";
 }
 
 export function Landing() {
   const [lectures, setLectures] = useState<Lecture[]>([]);
-  const [source, setSource] = useState<Source>("link");
+  const [loaded, setLoaded] = useState(false);
   const [value, setValue] = useState("");
-  const [file, setFile] = useState<File | null>(null);
   const [lang, setLang] = useState("ar");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dropping, setDropping] = useState(false);
+  const [query, setQuery] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [shorts, setShorts] = useState<Record<string, Short[]>>({});
+  const fileRef = useRef<HTMLInputElement>(null);
   const libRef = useRef<HTMLElement>(null);
 
-  const refresh = () => api.lectures().then(setLectures).catch(() => {});
+  const refresh = () => api.lectures().then(setLectures).catch(() => {}).finally(() => setLoaded(true));
   useEffect(() => { refresh(); }, []);
   const active = lectures.some((l) => l.job || l.status === "importing" || l.status === "analyzing");
   useInterval(refresh, active ? 1500 : 10000);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  // each lecture's shorts, fetched again only when its count changes
+  const shortsKey = lectures.filter((l) => l.status === "ready" && l.shorts).map((l) => `${l.id}:${l.shorts}`).join(",");
+  useEffect(() => {
+    for (const l of lectures) {
+      if (l.status !== "ready" || !l.shorts) continue;
+      api.shorts(l.id).then((list) => setShorts((m) => ({ ...m, [l.id]: list.filter((s) => s.ranges.length || s.rendered) }))).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shortsKey]);
+
+  async function run(job: () => Promise<unknown>) {
     setError(null);
     setBusy(true);
-    const language = lang === "auto" ? null : lang;
     try {
-      if (source === "link") await api.importUrl(value.trim(), language);
-      else if (source === "path") await api.importLocal(value.trim(), language);
-      else if (file) await api.importFile(file, language);
+      await job();
       setValue("");
-      setFile(null);
       await refresh();
       libRef.current?.scrollIntoView({ behavior: "smooth" });
     } catch (err) {
@@ -49,139 +61,198 @@ export function Landing() {
       setBusy(false);
     }
   }
-
-  const open = (l: Lecture) => go({ page: "editor", lecture: l.id, mode: "edit" });
-  const latestReady = lectures.find((l) => l.status === "ready");
-  const openEditor = () => {
-    if (latestReady) open(latestReady);
-    else document.getElementById("src")?.focus();
+  const language = lang === "auto" ? null : lang;
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const v = value.trim();
+    if (!v) return;
+    run(() => (isLink(v) ? api.importUrl(v, language) : api.importLocal(v, language)));
   };
+  const upload = (f: File) => run(() => api.importFile(f, language));
+
+  // drop a video anywhere on the page
+  useEffect(() => {
+    let depth = 0;
+    const hasFile = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+    const enter = (e: DragEvent) => { if (hasFile(e)) { depth++; setDropping(true); } };
+    const leave = () => { depth = Math.max(0, depth - 1); if (!depth) setDropping(false); };
+    const over = (e: DragEvent) => { if (hasFile(e)) e.preventDefault(); };
+    const drop = (e: DragEvent) => {
+      if (!hasFile(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDropping(false);
+      const f = e.dataTransfer?.files[0];
+      if (f) upload(f);
+    };
+    window.addEventListener("dragenter", enter);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragenter", enter);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("drop", drop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang]);
+
+  const open = (l: Lecture, short?: string) => go({ page: "editor", lecture: l.id, mode: "edit", short });
+  const shown = useMemo(() => {
+    const q = normalize(query);
+    return q ? lectures.filter((l) => normalize(l.title).includes(q)) : lectures;
+  }, [lectures, query]);
+  const shortCount = lectures.reduce((n, l) => n + l.shorts, 0);
+  const latest = lectures.find((l) => l.status === "ready");
+  const v = value.trim();
 
   return (
     <div className="landing">
-      <header className="l-header">
-        <a href="#/" className="brand">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M10 9.5l4 2.5-4 2.5z" fill="currentColor" /></svg>
-          Lecture Shorts
-        </a>
-        <nav aria-label="Main" className="l-nav">
-          <a href="#modes" onClick={(e) => { e.preventDefault(); document.getElementById("modes")?.scrollIntoView({ behavior: "smooth" }); }}>The editor</a>
-          <a href="#how" onClick={(e) => { e.preventDefault(); document.getElementById("how")?.scrollIntoView({ behavior: "smooth" }); }}>How it works</a>
-        </nav>
-        <span className="grow" />
-        <button type="button" className="btn ghost" onClick={() => libRef.current?.scrollIntoView({ behavior: "smooth" })}>
-          Library{lectures.length ? ` · ${lectures.length}` : ""}
-        </button>
-      </header>
+      <div className="wrap">
+        <header className="l-header">
+          <a href="#/" className="brand"><Mark /> Lecture Shorts</a>
+          <span className="grow" />
+          {lectures.length > 0 && (
+            <span className="tc small dim">{lectures.length} lecture{lectures.length === 1 ? "" : "s"} · {shortCount} short{shortCount === 1 ? "" : "s"}</span>
+          )}
+        </header>
 
-      <section className="hero">
-        <div className="hero-copy">
-          <h1>Hour-long lectures in. Shorts people finish, out.</h1>
-          <p className="lede">Pauses are removed with smooth morph cuts, the frame follows the speaker, and Arabic captions read right-to-left the way they should.</p>
-          <form className="import" onSubmit={submit}>
-            <div className="import-tabs" role="tablist" aria-label="Import from">
-              {(["link", "file", "path"] as Source[]).map((s) => (
-                <button key={s} type="button" role="tab" aria-selected={source === s}
-                  className={source === s ? "on" : ""} onClick={() => { setSource(s); setError(null); }}>
-                  {s === "link" ? "Link" : s === "file" ? "Upload file" : "File on this computer"}
-                </button>
-              ))}
-            </div>
-            <label htmlFor="src" className="sr">Lecture source</label>
-            <div className="import-box">
-              {source === "file" ? (
-                <input id="src" type="file" accept="video/*,.mkv" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-              ) : (
-                <input id="src" type="text" value={value} onChange={(e) => setValue(e.target.value)}
-                  placeholder={source === "link" ? "Paste a YouTube link" : "/home/me/Videos/lecture.mp4"} />
+        <section className="hero">
+          <div className="hero-copy">
+            <h1>Hour-long lectures in. Shorts people <em>finish</em>, out.</h1>
+            <p className="lede">Mark the moments in red. Pauses are cut with smooth morphs, the frame follows the speaker, and Arabic captions read right to left.</p>
+            <form className="import" onSubmit={submit}>
+              <label htmlFor="src" className="eyebrow">Add a lecture</label>
+              <div className="import-box">
+                <input id="src" type="text" value={value} dir="auto" autoComplete="off" spellCheck={false}
+                  onChange={(e) => { setValue(e.target.value); setError(null); }}
+                  placeholder="YouTube link or a file path on this computer" />
+                <select aria-label="Lecture language" value={lang} onChange={(e) => setLang(e.target.value)}>
+                  <option value="ar">Arabic</option>
+                  <option value="en">English</option>
+                  <option value="auto">Detect</option>
+                </select>
+                <button type="submit" className="btn dark" disabled={busy || !v}>{busy ? "Importing…" : "Import"}</button>
+              </div>
+              {error ? <p className="err" role="alert">{error}</p> : (
+                <p className="hint">
+                  {v ? (isLink(v) ? "A link: the video is downloaded once." : "A file on this computer: it's linked, not copied.") : "Or drop a video anywhere on this page"}
+                  {" · "}
+                  <button type="button" className="link" onClick={() => fileRef.current?.click()}>choose a file</button>
+                  {" · MP4, MOV, WebM, MKV"}
+                </p>
               )}
-              <select aria-label="Lecture language" value={lang} onChange={(e) => setLang(e.target.value)}>
-                <option value="ar">Arabic</option>
-                <option value="en">English</option>
-                <option value="auto">Auto-detect</option>
-              </select>
-              <button type="submit" className="btn dark" disabled={busy || (source === "file" ? !file : !value.trim())}>
-                {busy ? "Importing…" : "Import"}
-              </button>
-            </div>
-            {error ? <p className="err" role="alert">{error}</p> : <p className="hint">MP4, MOV, WebM or MKV · 16:9 sources work best</p>}
-          </form>
-        </div>
-        <div className="hero-art" aria-hidden="true">
-          {lectures.filter((l) => l.status === "ready").slice(0, 3).map((l, i) => (
-            <div key={l.id} className={`phone p${i}`} style={{ backgroundImage: `url(${api.thumbUrl(l.id)})` }} />
-          ))}
-          {!lectures.some((l) => l.status === "ready") && <><div className="phone p0 empty" /><div className="phone p1 empty" /><div className="phone p2 empty" /></>}
-        </div>
-      </section>
+              <input ref={fileRef} type="file" accept="video/*,.mkv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) upload(f); }} />
+            </form>
+          </div>
+          <HeroPage thumb={latest ? api.thumbUrl(latest.id) : null} />
+        </section>
 
-      <section id="modes" className="modes" aria-labelledby="modes-h">
-        <h2 id="modes-h">Watch it or read it, in one place</h2>
-        <p className="sub">The video with its timeline and the transcript sit side by side, and both edit the same short.</p>
-        <div className="mode-grid">
-          <article className="mode-card dark">
-            <div className="mode-art studio-art" aria-hidden="true">
-              <div className="crop" />
-              <div className="mini-wave">{Array.from({ length: 70 }, (_, i) => <span key={i} style={{ height: `${i % 11 < 2 ? 8 : 30 + ((i * 37) % 60)}%` }} className={i > 12 && i < 44 ? "sel" : ""} />)}</div>
-            </div>
-            <span className="eyebrow gold">WATCH &amp; MARK</span>
-            <h3>Timeline</h3>
-            <p>Scrub the video, press I and O to mark a moment, and fine-tune on the waveform. Pauses and the speaker framing are visible as you go.</p>
-            <ul><li>Works without a transcript</li><li>Frame-accurate in and out points</li><li>Drag the frame to set each camera</li></ul>
-          </article>
-          <article className="mode-card light">
-            <div className="mode-art read-art" lang="ar" dir="rtl" aria-hidden="true">
-              <p className="dim"><span className="q-badge">﴿ الأعراف ٧:١٣٤ ﴾</span> وَلَمَّا وَقَعَ عَلَيْهِمُ ٱلرِّجْزُ قَالُوا۟ يَٰمُوسَى</p>
-              <p className="dim">قَالَ شَكَا أَهْلُ الْكُوفَةِ <mark>سَعْدًا</mark> إِلَى عُمَرَ <span className="pause">0.9s</span></p>
-              <p className="sel">فَأَرْسَلَ إِلَيْهِ فَقَالَ: يَا أَبَا إِسْحَاقَ، إِنَّ هَؤُلَاءِ <span className="doubt">يَزْعُمُونَ</span> أَنَّكَ لَا تُحْسِنُ تُصَلِّي
-                <span className="tr" dir="ltr" lang="en">“O Abu Ishaq, these people claim that you do not pray well.”</span></p>
-            </div>
-            <span className="eyebrow green">READ &amp; SELECT</span>
-            <h3>Transcript</h3>
-            <p>Read the lecture like a document, with full harakat. Search a word, click the sentences you want, and fix any doubtful word right there.</p>
-            <ul><li>Quran verses in the exact mushaf text, hadith with their source</li><li>Doubtful words underlined, with what else was heard</li><li>Optional English translation, editable too</li></ul>
-          </article>
-        </div>
-        <button type="button" className="btn dark open-editor" onClick={openEditor}>Open the editor →</button>
-      </section>
+        <section ref={libRef} className="library" aria-labelledby="lib-h">
+          <div className="lib-head">
+            <h2 id="lib-h">Library</h2>
+            <span className="grow" />
+            {lectures.length > 3 && (
+              <label className="search">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+                <span className="sr">Search lectures</span>
+                <input type="search" dir="auto" value={query} placeholder="Search lectures" onChange={(e) => setQuery(e.target.value)} />
+              </label>
+            )}
+          </div>
+          {loaded && lectures.length === 0 ? <EmptyLibrary onChoose={() => fileRef.current?.click()} /> : (
+            <ul className="lib-list">
+              {query && shown.length === 0 && <li className="lib-none">No lecture title matches “{query}”.</li>}
+              {shown.map((l) => (
+                <li key={l.id} className="lib-row">
+                  <div className="thumb" style={l.status === "ready" ? { backgroundImage: `url(${api.thumbUrl(l.id)})` } : undefined} />
+                  <div className="lib-main">
+                    <span className={`lib-title ${/[؀-ۿ]/.test(l.title) ? "ar" : ""}`} dir="auto">{l.title}</span>
+                    {l.status === "error" ? (
+                      <span className="err">{l.job?.message ? `Import failed: ${l.job.message}` : "Import failed. Remove it and add the lecture again."}</span>
+                    ) : (
+                      <span className="lib-meta tc">
+                        {l.duration ? fmt(l.duration, 0) : "—"}{l.language ? ` · ${LANG_NAME[l.language] ?? l.language}` : ""} · {statusText(l)}
+                      </span>
+                    )}
+                    {l.job && l.job.status !== "error" && <div className="rule-progress" role="progressbar" aria-label="Progress" aria-valuemin={0} aria-valuemax={100}
+                      aria-valuenow={Math.round((l.job.progress || 0) * 100)}><i style={{ width: `${(l.job.progress || 0) * 100}%` }} /></div>}
+                    {(shorts[l.id]?.length ?? 0) > 0 && (
+                      <div className="slips">
+                        {shorts[l.id].map((s) => (
+                          <a key={s.id} href={`#/l/${l.id}/edit/${s.id}`} className={`slip ${s.rendered ? "done" : ""}`}
+                            onClick={(e) => { e.preventDefault(); open(l, s.id); }}>
+                            <i aria-hidden="true" />
+                            <span>{s.name}{s.rendered ? " ✓" : ""}</span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                    {deleting === l.id && (
+                      <Confirm action="Delete lecture" cancel="Keep it" onCancel={() => setDeleting(null)}
+                        onConfirm={async () => { setDeleting(null); await api.deleteLecture(l.id).catch((e) => setError(e.message)); refresh(); }}>
+                        Delete this lecture and its {l.shorts} short{l.shorts === 1 ? "" : "s"}? A video file linked from this computer is not touched.
+                      </Confirm>
+                    )}
+                  </div>
+                  <div className="lib-actions">
+                    <button type="button" className="btn dark" disabled={l.status !== "ready"} onClick={() => open(l)}>Open</button>
+                    <button type="button" className="btn" aria-label={`Delete ${l.title}`} title="Delete"
+                      onClick={() => setDeleting(deleting === l.id ? null : l.id)}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+        <footer className="l-footer tc">Lecture Shorts · runs on this computer</footer>
+      </div>
+      {dropping && <div className="drop-veil" aria-hidden="true"><span>Drop the video to add it</span></div>}
+    </div>
+  );
+}
 
-      <section ref={libRef} className="library" aria-labelledby="lib-h">
-        <h2 id="lib-h">Library</h2>
-        {lectures.length === 0 ? (
-          <p className="sub">No lectures yet. Import one above to get started.</p>
-        ) : (
-          <ul className="lib-list">
-            {lectures.map((l) => (
-              <li key={l.id} className="lib-row">
-                <div className="thumb" style={l.status === "ready" ? { backgroundImage: `url(${api.thumbUrl(l.id)})` } : undefined} />
-                <div className="lib-main">
-                  <span className="lib-title" dir="auto">{l.title}</span>
-                  <span className="lib-meta">
-                    {l.duration ? fmt(l.duration, 0) : "—"} · {l.shorts} short{l.shorts === 1 ? "" : "s"} · {statusText(l)}
-                  </span>
-                  {l.job && <progress max={1} value={l.job.progress || undefined} aria-label="Progress" />}
-                </div>
-                <div className="lib-actions">
-                  <button type="button" className="btn" disabled={l.status !== "ready"} onClick={() => open(l)}>Open</button>
-                  <button type="button" className="btn ghost" aria-label={`Delete ${l.title}`}
-                    onClick={async () => { if (confirm(`Delete “${l.title}” and its shorts?`)) { await api.deleteLecture(l.id); refresh(); } }}>✕</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+const HERO_LINES: [string, string, boolean][] = [
+  ["12:02", "قَالَ شَكَا أَهْلُ الْكُوفَةِ سَعْدًا إِلَى عُمَرَ", false],
+  ["12:09", "فَأَرْسَلَ إِلَيْهِ فَقَالَ: يَا أَبَا إِسْحَاقَ، إِنَّ هَؤُلَاءِ يَزْعُمُونَ أَنَّكَ لَا تُحْسِنُ تُصَلِّي", true],
+  ["12:16", "قَالَ: أَمَّا أَنَا وَاللَّهِ فَإِنِّي كُنْتُ أُصَلِّي بِهِمْ صَلَاةَ رَسُولِ اللَّهِ ﷺ", false],
+];
 
-      <section id="how" className="how" aria-labelledby="how-h">
-        <h2 id="how-h">What happens to every short</h2>
-        <ol>
-          <li><span className="num">01</span><b>Pauses removed, smoothly</b><span>Silences are found from the audio itself and cut out. Each cut is blended with an optical-flow morph, so the speaker never jumps.</span></li>
-          <li><span className="num">02</span><b>The frame follows the speaker</b><span>A 9:16 window tracks the speaker's face like a calm camera operator, and switches cleanly on the exact frame the camera changes.</span></li>
-          <li><span className="num">03</span><b>Captions that read right</b><span>Word-timed captions in short chunks, right-to-left for Arabic, with harakat and the spoken word highlighted if you want them, or in English.</span></li>
-          <li><span className="num">04</span><b>Quran named on screen</b><span>While a verse is quoted, a small line above the captions names the surah and ayah, so viewers know it's Quran.</span></li>
-        </ol>
-      </section>
-      <footer className="l-footer">Lecture Shorts · runs on your machine</footer>
+/** The hero's picture: a ruled transcript page with one sentence in red, and the short it becomes. */
+function HeroPage({ thumb }: { thumb: string | null }) {
+  return (
+    <div className="hero-art" aria-hidden="true">
+      <div className="page">
+        {HERO_LINES.map(([t, text, inShort]) => (
+          <div key={t} className={`page-line ${inShort ? "in" : ""}`}>
+            <span className="tc">{t}</span>
+            <p dir="rtl" lang="ar">{text}</p>
+          </div>
+        ))}
+      </div>
+      <div className="hero-slip" style={thumb ? { backgroundImage: `url(${thumb})` } : undefined}>
+        <span className="hero-tag">Bukhari 755</span>
+        <span className="hero-cap" dir="rtl" lang="ar">يَا أَبَا إِسْحَاقَ</span>
+      </div>
+    </div>
+  );
+}
+
+function EmptyLibrary({ onChoose }: { onChoose: () => void }) {
+  return (
+    <div className="empty-lib">
+      <h3>Add your first lecture</h3>
+      <p>Paste a YouTube link or a file path above, or drop a video here. Each lecture is analysed once: waveform, pauses, cameras and the lecturer's face.</p>
+      <button type="button" className="drop-zone" onClick={onChoose}>Drop a video file here, or click to choose one</button>
+      <ul className="facts">
+        <li><b>Pauses cut smoothly</b><span>Silences are found from the audio and blended with an optical-flow morph, so the speaker never jumps.</span></li>
+        <li><b>The frame follows the speaker</b><span>A 9:16 window holds the lecturer and switches on the exact frame the camera changes.</span></li>
+        <li><b>Captions that read right</b><span>Word-timed, right to left for Arabic, with harakat if you want them, or in English.</span></li>
+        <li><b>Quran named on screen</b><span>While a verse is quoted, a small line above the captions names the surah and ayah.</span></li>
+      </ul>
     </div>
   );
 }

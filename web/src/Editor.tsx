@@ -3,9 +3,11 @@ import {
   api, defaultSettings, type Cameras, type Estimate, type Job, type Lecture, type Range, type Short,
   type ShortSettings, type Styles, type Transcript, type Translation,
 } from "./api";
+import { Confirm } from "./Confirm";
+import { Mark } from "./Mark";
 import { go } from "./main";
 import { Workspace } from "./Workspace";
-import { useDebounced, useInterval } from "./util";
+import { fmt, useDebounced, useInterval } from "./util";
 
 export type Mode = "edit";
 
@@ -79,6 +81,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   const [framingVersion, setFramingVersion] = useState(0);
   const loadCameras = useCallback(() => api.cameras(lectureId).then(setCameras).catch(() => {}), [lectureId]);
   const dirty = useRef<Set<string>>(new Set());
+  const initialShort = useRef(shortId);
   // previous session's shorts, hidden after a reload until restored or discarded
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
@@ -102,7 +105,10 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
     api.shorts(lectureId).then(async (list) => {
       const fresh = !opened.has(lectureId);
       opened.add(lectureId);
-      const previous = fresh ? list.filter((s) => s.ranges.length || s.rendered) : [];
+      // a link to one of the previous shorts (from the library) opens the previous session as it was
+      const asked = initialShort.current;
+      const previous = fresh && !list.some((s) => s.id === asked && (s.ranges.length || s.rendered))
+        ? list.filter((s) => s.ranges.length || s.rendered) : [];
       let draft = list.find((s) => !s.ranges.length && !s.rendered);
       if (fresh && draft) draft = await api.updateShort(lectureId, draft.id, defaultSettings(draft.name));
       if (!draft) {
@@ -263,69 +269,94 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
     setHidden(new Set());
   };
 
+  const clips = prev.reduce((n, s) => n + s.ranges.length, 0);
+  const rendered = prev.filter((s) => s.rendered).length;
+  const notice = prev.length > 0 && (
+    <div className="restore" role="status">
+      <span>Last time you had {prev.length} short{prev.length > 1 ? "s" : ""} ({clips} clip{clips === 1 ? "" : "s"}{rendered ? `, ${rendered} rendered` : ""}). This one starts fresh.</span>
+      <button type="button" className="btn small" onClick={restore}>Restore</button>
+      <button type="button" className="btn small ghost" onClick={discard}
+        title="Deletes the drafts; rendered shorts are kept">Discard drafts</button>
+    </div>
+  );
+
   return (
     <>
-      {error && <div className="toast" role="alert" onClick={() => setError(null)}>{error} <button type="button" aria-label="Dismiss">✕</button></div>}
-      {prev.length > 0 && (
-        <div className="restore" role="status">
-          <span>Started fresh. Your last session had <b>{prev.length} short{prev.length > 1 ? "s" : ""}</b>
-            {" "}({prev.reduce((n, s) => n + s.ranges.length, 0)} clips{prev.some((s) => s.rendered) ? ", some rendered" : ""}).</span>
-          <button type="button" className="btn small primary" onClick={restore}>Restore previous session</button>
-          <button type="button" className="btn small" onClick={discard}
-            title="Deletes unrendered drafts; rendered shorts are kept">Discard</button>
-        </div>
-      )}
-      <Workspace ed={ed} />
+      {error && <div className="toast" role="alert">{error} <button type="button" aria-label="Dismiss" onClick={() => setError(null)}>✕</button></div>}
+      <Workspace ed={ed} notice={notice || null} />
     </>
   );
 }
 
-/** Top bar: brand, lecture, short picker, render. */
+/** Top bar: brand, lecture, the lecture's shorts as tabs, render. */
 export function TopBar({ ed }: { ed: Ed }) {
   const { lecture, shorts, short } = ed;
+  const [deleting, setDeleting] = useState(false);
   const failed = ed.jobs.find((j) => j.short_id === short?.id && j.status === "error" && j.kind === "render");
+  const e = ed.estimate;
+  const n = short?.ranges.length ?? 0;
   return (
-    <header className="topbar">
-      <a href="#/" className="brand">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M10 9.5l4 2.5-4 2.5z" fill="currentColor" /></svg>
-        Lecture Shorts
-      </a>
-      <span className="crumb" dir="auto">{lecture.title}</span>
-      <span className="grow" />
-      <label className="short-pick">
-        <span className="sr">Current short</span>
-        <select value={short?.id ?? ""} onChange={(e) => (e.target.value === "__new" ? ed.newShort() : ed.selectShort(e.target.value))}>
-          {shorts.map((s) => <option key={s.id} value={s.id}>{s.name} {s.rendered ? "✓" : ""}</option>)}
-          <option value="__new">+ New short</option>
-        </select>
-      </label>
-      {short && shorts.length > 1 && (
-        <button type="button" className="btn small ghost" onClick={() => { if (confirm(`Delete ${short.name}?`)) ed.removeShort(short.id); }}>Delete short</button>
+    <>
+      <header className="topbar">
+        <a href="#/" className="brand" title="Back to the library"><Mark size={20} /> Lecture Shorts</a>
+        <span className="crumb-sep" aria-hidden="true">/</span>
+        <span className="crumb" dir="auto">{lecture.title}</span>
+        <nav className="short-tabs" aria-label="Shorts">
+          {shorts.map((s) => (
+            <span key={s.id} className={`short-tab ${s.id === short?.id ? "on" : ""}`}>
+              <button type="button" aria-current={s.id === short?.id ? "page" : undefined} onClick={() => ed.selectShort(s.id)}>
+                {s.name}{s.rendered && <span className="done" aria-label="rendered"> ✓</span>}
+              </button>
+              {s.id === short?.id && shorts.length > 1 && (
+                <button type="button" className="icon tab-x" aria-label={`Delete ${s.name}`} title={`Delete ${s.name}`}
+                  onClick={() => setDeleting(true)}>✕</button>
+              )}
+            </span>
+          ))}
+          <span className="short-tab"><button type="button" onClick={() => ed.newShort()}>+ New short</button></span>
+        </nav>
+        <span className="grow" />
+        {failed && <span className="bad" title={failed.message}>Last render failed: {failed.message}</span>}
+        {n > 0 && <span className="tc small dim">{n} clip{n === 1 ? "" : "s"}{e ? ` · ${fmt(e.duration / (short?.speed ?? 1), 0)} after cuts` : ""}</span>}
+        <RenderButton ed={ed} />
+      </header>
+      {deleting && short && (
+        <Confirm className="bar-confirm" action={`Delete ${short.name}`} cancel="Keep it" onCancel={() => setDeleting(false)}
+          onConfirm={() => { setDeleting(false); ed.removeShort(short.id); }}>
+          Delete {short.name}{short.rendered ? " and its rendered video" : ""}? Its {short.ranges.length} clip{short.ranges.length === 1 ? "" : "s"} go too.
+        </Confirm>
       )}
-      {failed && <span className="bad" title={failed.message}>Last render failed: {failed.message}</span>}
-    </header>
+    </>
   );
 }
 
-export function RenderButton({ ed, block }: { ed: Ed; block?: boolean }) {
+export function RenderButton({ ed }: { ed: Ed }) {
+  const [asking, setAsking] = useState(false);
   const j = ed.renderJob;
   if (j) {
+    const pct = Math.round(j.progress * 100);
     return (
-      <div className={`render-progress ${block ? "block" : ""}`} role="status">
-        <span>{j.status === "queued" ? "Queued…" : `${j.stage || "rendering"} ${Math.round(j.progress * 100)}%`}</span>
-        <progress max={1} value={j.progress} />
+      <div className="render-progress" role="status" aria-label={`Rendering ${ed.short?.name ?? "short"}`}>
+        <span>{j.status === "queued" ? "Queued…" : `${j.stage || "Rendering"} · ${pct}%`}</span>
+        <i style={{ width: `${j.status === "queued" ? 0 : pct}%` }} />
       </div>
     );
   }
+  const dur = (ed.estimate?.duration ?? 0) / (ed.short?.speed ?? 1);
   return (
-    <button type="button" className={`btn primary ${block ? "block" : ""}`} disabled={!ed.short?.ranges.length}
-      onClick={() => {
-        const dur = ed.estimate?.duration ?? 0;
-        if (dur > 180 && !confirm(`This short will be ${Math.round(dur / 60)} minutes long. Shorts are usually under 3 minutes, `
-          + `and long ones take a while to render (roughly a third of their length). Render anyway?`)) return;
-        ed.render();
-      }}>
-      Render {ed.short?.name ?? "short"}
-    </button>
+    <span className="render-wrap">
+      <button type="button" className="btn primary" disabled={!ed.short?.ranges.length}
+        title={ed.short?.ranges.length ? undefined : "Add a clip first"}
+        onClick={() => (dur > 180 ? setAsking(true) : ed.render())}>
+        Render {ed.short?.name ?? "short"}
+      </button>
+      {asking && (
+        <Confirm className="render-ask" tone="warn" action="Render anyway" cancel="Back to editing"
+          onCancel={() => setAsking(false)} onConfirm={() => { setAsking(false); ed.render(); }}>
+          <b>{ed.short?.name} will be {Math.round(dur / 60)} minutes long</b>
+          <span>Shorts are usually under 3 minutes. Long ones take a while to render, roughly a third of their length.</span>
+        </Confirm>
+      )}
+    </span>
   );
 }
