@@ -434,3 +434,5 @@ details summary { cursor: pointer; font-weight: 500; }
 .transcript span.fl-doubt, .transcript span.fl-voted { cursor: help; }
 .fl-gemini { text-decoration: underline solid var(--lapis); text-decoration-thickness: 2px; text-underline-offset: 7px; }
 .err-text { color: var(--err); }
+.confirm-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; }
+.confirm-check code { font-family: var(--f-mono, monospace); font-size: 11px; word-break: break-all; opacity: 0.8; }

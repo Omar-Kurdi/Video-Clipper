@@ -177,6 +177,22 @@ Other flags: `--min-gap 0.4` (cut pauses longer than this), `--zoom 1.15`
 `shorts/pipeline.py` wraps all of this in one call (`make_short`) used by both
 the CLI and the web server (`server/`: FastAPI, a GPU job queue, JSON storage).
 
+## Where files go
+
+- `data/lectures/<id>/`: one folder per lecture: the downloaded or uploaded
+  video (`source.mp4`), rendered shorts (`renders/`), the transcript and
+  translation, the analysis (waveform, cameras) and thumbnails. A video
+  imported "from this computer" is only linked here, not copied.
+- **Deleting a lecture** in the library removes its whole folder, renders
+  included, and says how much space that frees. For a linked video you can
+  also tick "Also delete the original video", which removes that file and the
+  files the command-line tool keeps next to it. A lecture can't be deleted
+  while a job (download, transcription, render...) is still running for it.
+- `data/styles/`: saved caption styles.
+- `~/.cache/huggingface/`: the AI models (about 19 GB for everything the app
+  uses; see Credits), shared with other apps on this computer.
+- `./stop.sh` won't stop the app while it's still working; `./stop.sh -f` does.
+
 ## Tests
 
 ```bash

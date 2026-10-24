@@ -26,6 +26,8 @@ export interface Lecture {
   fps?: number;
   created: number;
   shorts: number;
+  /** disk use: the lecture's own folder, and the original video it links to (imported "from this computer") */
+  disk?: { bytes: number; linked: string | null; linked_bytes: number };
   job: Job | null;
 }
 
@@ -171,7 +173,8 @@ export const api = {
     fd.append("language", language ?? "");
     return req<Lecture>("/api/lectures/upload", { method: "POST", body: fd });
   },
-  deleteLecture: (id: string) => req<{ ok: boolean }>(`/api/lectures/${id}`, { method: "DELETE" }),
+  deleteLecture: (id: string, original = false) =>
+    req<{ ok: boolean; freed: number }>(`/api/lectures/${id}${original ? "?original=true" : ""}`, { method: "DELETE" }),
   waveform: (id: string) => req<{ rate: number; peaks: number[] }>(`/api/lectures/${id}/waveform`),
   speech: (id: string) => req<Range[]>(`/api/lectures/${id}/speech`),
   transcript: (id: string) => req<Transcript>(`/api/lectures/${id}/transcript`),

@@ -5,6 +5,8 @@ import { Mark } from "./Mark";
 import { go } from "./main";
 import { fmt, normalize, useInterval } from "./util";
 
+const fmtBytes = (n: number) => n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`;
+
 const LANG_NAME: Record<string, string> = { ar: "Arabic", en: "English" };
 const isLink = (v: string) => /^https?:\/\//i.test(v) || /(^|\.)(youtube\.com|youtu\.be)\//i.test(v);
 
@@ -28,6 +30,7 @@ export function Landing() {
   const [dropping, setDropping] = useState(false);
   const [query, setQuery] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [alsoOriginal, setAlsoOriginal] = useState(false);
   const [shorts, setShorts] = useState<Record<string, Short[]>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const libRef = useRef<HTMLElement>(null);
@@ -190,9 +193,22 @@ export function Landing() {
                       </div>
                     )}
                     {deleting === l.id && (
-                      <Confirm action="Delete lecture" cancel="Keep it" onCancel={() => setDeleting(null)}
-                        onConfirm={async () => { setDeleting(null); await api.deleteLecture(l.id).catch((e) => setError(e.message)); refresh(); }}>
-                        Delete this lecture and its {l.shorts} short{l.shorts === 1 ? "" : "s"}? A video file linked from this computer is not touched.
+                      <Confirm action="Delete lecture" cancel="Keep it" onCancel={() => { setDeleting(null); setAlsoOriginal(false); }}
+                        onConfirm={async () => {
+                          setDeleting(null);
+                          await api.deleteLecture(l.id, alsoOriginal).catch((e) => setError(e.message));
+                          setAlsoOriginal(false);
+                          refresh();
+                        }}>
+                        Delete this lecture and its {l.shorts} short{l.shorts === 1 ? "" : "s"}
+                        {l.disk ? <> (the video, renders and transcript: {fmtBytes(l.disk.bytes + (alsoOriginal ? l.disk.linked_bytes : 0))} freed)</> : null}?
+                        {l.disk?.linked && (
+                          <label className="confirm-check">
+                            <input type="checkbox" checked={alsoOriginal} onChange={(e) => setAlsoOriginal(e.target.checked)} />
+                            Also delete the original video on this computer ({fmtBytes(l.disk.linked_bytes)}):
+                            <code dir="ltr">{l.disk.linked}</code>
+                          </label>
+                        )}
                       </Confirm>
                     )}
                   </div>
