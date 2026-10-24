@@ -18,7 +18,6 @@ models/texts/
 # frontend
 web/node_modules/
 web/dist/
-.claude/
 .run/
 *.cameras.json
 # secrets (API keys)
