@@ -51,6 +51,7 @@ export interface Ed {
   setCameraZoom: (cid: number, zoom: number | null) => Promise<void>;
   setFramingAt: (t: number, x: number) => Promise<void>;
   editSegment: (k: number, text: string | null) => Promise<void>;
+  editWord: (i: number, text: string | null) => Promise<void>;
   time: number;
   setTime: (t: number) => void;
 }
@@ -247,6 +248,10 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       },
       editSegment: async (k, text) => {
         const t = await api.editSegment(lectureId, k, text).catch((e) => { setError(e.message); return null; });
+        if (t) setTranscript(t);
+      },
+      editWord: async (i, text) => {
+        const t = await api.editWord(lectureId, i, text).catch((e) => { setError(e.message); return null; });
         if (t) setTranscript(t);
       },
     };

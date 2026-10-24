@@ -179,6 +179,9 @@ export const api = {
     req<Transcript>(`/api/lectures/${id}/transcript/segments/${k}`, json({ text }, "PUT")),
   features: () => req<{ gemini: boolean }>("/api/features"),
   proofread: (id: string) => req<Job>(`/api/lectures/${id}/proofread`, { method: "POST" }),
+  /** settle a doubtful word: another reading (may be several words, or "" to remove it), or null to keep it */
+  editWord: (id: string, i: number, text: string | null) =>
+    req<Transcript>(`/api/lectures/${id}/transcript/words/${i}`, json({ text }, "PUT")),
   translation: (id: string, lang: string) => req<Translation>(`/api/lectures/${id}/translation/${lang}`),
   editTranslation: (id: string, lang: string, k: number, text: string) =>
     req<Translation>(`/api/lectures/${id}/translation/${lang}/segments/${k}`, json({ text }, "PUT")),

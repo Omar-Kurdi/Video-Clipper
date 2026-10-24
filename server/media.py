@@ -18,6 +18,7 @@ from shorts.transcribe import load_words, words_path
 from shorts.util import encode_args
 
 from . import store
+from .transcript_edit import replace_word, splice
 
 PEAKS_PER_SEC = 20
 BROWSER_CODECS = {"h264", "vp8", "vp9", "av1"}
@@ -260,12 +261,18 @@ def edit_segment(lid: str, k: int, text: str | None) -> dict:
                 new.append({"w": tok, "s": round(t, 3), "e": round(t + dur * 0.92, 3)})
                 t += dur
         seg["edited"] = True
-    delta = len(new) - len(old)
-    words[seg["w0"]:seg["w1"]] = new
-    seg["w1"] += delta
-    for later in segs[k + 1:]:
-        later["w0"] += delta
-        later["w1"] += delta
+    splice(data, k, seg["w0"], seg["w1"], new)
+    words_path(store.source_path(lid)).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
+def edit_word(lid: str, i: int, text: str | None) -> dict:
+    """Settle word i: replace it with `text` (one of the other readings), or
+    None to keep it as recognised. See transcript_edit.replace_word."""
+    data = transcript(lid)
+    if data is None:
+        raise KeyError("transcript")
+    replace_word(data, i, text)
     words_path(store.source_path(lid)).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return data
 

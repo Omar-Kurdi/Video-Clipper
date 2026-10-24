@@ -421,5 +421,16 @@ details summary { cursor: pointer; font-weight: 500; }
 /* recogniser disagreement (see Word.flag) */
 .fl-doubt { text-decoration: underline wavy var(--red); text-decoration-thickness: 1.5px; text-underline-offset: 7px; }
 .fl-voted { text-decoration: underline dotted var(--ochre); text-decoration-thickness: 2px; text-underline-offset: 7px; }
+
+/* settling a doubtful word: the other readings, one click each */
+.word-fix { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 4px; padding: 10px 12px; border: 1px solid var(--line-2);
+  border-radius: 4px; background: var(--panel); font-family: var(--f-ui); font-size: 12px; line-height: 1.5; color: var(--fg-2); cursor: default; }
+.word-fix b { font-weight: 500; }
+.word-fix .bad-reading { color: var(--red-text); }
+.word-fix .voted-reading { color: var(--ochre); }
+.word-fix-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.word-fix .reading { font-family: var(--f-naskh), var(--f-ui); font-size: 15px; }
+.word-fix .btn.reading { height: 34px; }
+.transcript span.fl-doubt, .transcript span.fl-voted { cursor: help; }
 .fl-gemini { text-decoration: underline solid var(--lapis); text-decoration-thickness: 2px; text-underline-offset: 7px; }
 .err-text { color: var(--err); }
