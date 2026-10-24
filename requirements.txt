@@ -1,8 +1,17 @@
 faster-whisper>=1.2
 opencv-python>=4.8
-numpy
+numpy<2.5  # numba (used by librosa) doesn't support newer NumPy yet
 Pillow>=10
 fastapi>=0.110
 uvicorn>=0.29
 python-multipart>=0.0.9
 yt-dlp
+# accurate Arabic (Cohere-Speech-Tashkeel), translation (Qwen3), Quran/hadith texts
+torch>=2.4
+transformers==5.8.1
+accelerate>=1.0
+librosa>=0.10
+soundfile>=0.12
+pandas>=2.0
+pyarrow>=15
+onnx-asr[cpu,hub]>=0.12  # second recogniser (NVIDIA FastConformer) for doubtful-word marks

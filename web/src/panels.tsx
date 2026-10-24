@@ -17,7 +17,8 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
   const [img, setImg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const key = useDebounced(JSON.stringify({ t: Math.round(t * 4) / 4, style: s?.style, style_data: s?.style_data,
-    title: s?.title, zoom: s?.zoom, captions: s?.captions }), 350);
+    title: s?.title, zoom: s?.zoom, captions: s?.captions, harakat: s?.harakat, caption_lang: s?.caption_lang, quran_tag: s?.quran_tag,
+    tr: ed.translation ? 1 : 0 }), 350);
 
   const sid = s?.id;
   useEffect(() => { setTab(pick()); }, [sid, ed.renderedVersion, s?.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -64,7 +65,7 @@ export function Stats({ ed }: { ed: Ed }) {
   return (
     <div className="stats">
       <div><b>{e ? fmt(e.selected, 0) : "0:00"}</b><span>selected</span></div>
-      <div><b className="good">{e ? fmt(e.duration, 0) : "0:00"}</b><span>after cuts</span></div>
+      <div><b className="good">{e ? fmt(e.duration / (ed.short?.speed ?? 1), 0) : "0:00"}</b><span>{(ed.short?.speed ?? 1) !== 1 ? `exported at ${ed.short?.speed}×` : "after cuts"}</span></div>
       <div><b>{e ? e.cuts : 0}</b><span>pause cuts</span></div>
     </div>
   );
@@ -153,6 +154,9 @@ export function CutsPanel({ ed }: { ed: Ed }) {
         <p className="help">How long the join takes. Short (2–3 frames) is quick and almost invisible, close to a jump cut. Longer (6–10) is softer, but you may notice the blend. 4 is a good start; check one with "Render this cut exactly" in the preview.</p>
       </>}
       <p className="muted small">Camera changes are always clean hard cuts, with the crop switching on the exact frame.</p>
+      <div className="row"><label htmlFor="xspeed">Export speed</label><span className="val">{(s.speed ?? 1).toFixed(2)}×</span></div>
+      <input id="xspeed" type="range" min={0.75} max={2} step={0.05} value={s.speed ?? 1} onChange={(e) => ed.update({ speed: +e.target.value })} />
+      <p className="help">Speeds up (or slows down) the exported video. The lecturer's voice keeps its normal pitch, so it sounds faster, not higher. To only <i>watch</i> faster, use the speed buttons on the players instead.</p>
     </div>
   );
 }
@@ -277,6 +281,18 @@ export function effectiveCaption(ed: Ed, part: "captions" | "title" = "captions"
   return { ...base[part], ...(d[part] ?? {}) };
 }
 
+/** Vertical position as a height from the middle of the screen: 0 = centre,
+ * positive = up, negative = down (stored as the 0..1 top-down fraction). */
+function HeightSlider({ label, y, onChange }: { label: string; y: number; onChange: (y: number) => void }) {
+  const h = Math.round((0.5 - y) * 100);
+  return (
+    <label className="field">
+      <span className="row"><span>{label}</span><span className="val">{h > 0 ? `+${h} (above centre)` : h < 0 ? `${h} (below centre)` : "0 (centre)"}</span></span>
+      <input type="range" min={-45} max={45} step={1} value={h} onChange={(e) => onChange(Math.round((0.5 - +e.target.value / 100) * 1000) / 1000)} />
+    </label>
+  );
+}
+
 export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
   const s = ed.short;
   if (!s || !ed.styles) return null;
@@ -284,8 +300,12 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
   const data = effectiveData(ed);
   const names = [...Object.keys(ed.styles.presets), ...Object.keys(ed.styles.custom)];
 
+  const base = data.base ?? (s.style in ed.styles!.presets ? s.style : "box");
   const patch = (p: Partial<TextStyle>) =>
-    ed.update({ style_data: { ...data, base: data.base ?? (s.style in ed.styles!.presets ? s.style : "box"), captions: { ...(data.captions ?? {}), ...p } } });
+    ed.update({ style_data: { ...data, base, captions: { ...(data.captions ?? {}), ...p } } });
+  const patchTitle = (p: Partial<TextStyle>) =>
+    ed.update({ style_data: { ...data, base, title: { ...(data.title ?? {}), ...p } } });
+  const plate = effectiveCaption(ed, "title")!;
 
   return (
     <div className="panel">
@@ -302,6 +322,30 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
       <label className="field">Name plate
         <input dir="auto" value={s.title ?? ""} placeholder="e.g. speaker name" onChange={(e) => ed.update({ title: e.target.value || null })} />
       </label>
+      {s.title && <>
+        <HeightSlider label="Name plate height" y={plate.y} onChange={(y) => patchTitle({ y })} />
+        <label className="field">Name plate size {plate.size}<input type="range" min={24} max={80} step={2} value={plate.size} onChange={(e) => patchTitle({ size: +e.target.value })} /></label>
+      </>}
+      <HeightSlider label="Caption height" y={cap.y} onChange={(y) => patch({ y })} />
+      <label className="field">Caption language
+        <select value={s.caption_lang ?? "original"} onChange={(e) => ed.update({ caption_lang: e.target.value })}>
+          <option value="original">As spoken ({ed.translationLang === "en" ? "Arabic" : "English"})</option>
+          <option value={ed.translationLang} disabled={!ed.translation}>
+            {ed.translationLang === "en" ? "English" : "Arabic"} translation{ed.translation ? "" : " (translate the transcript first)"}
+          </option>
+        </select>
+      </label>
+      <label className="check" title="While a recognised Quran verse is quoted, a small line above the captions names the surah and ayah, so viewers know it's Quran">
+        <input type="checkbox" checked={s.quran_tag ?? true} onChange={(e) => ed.update({ quran_tag: e.target.checked })} />
+        Show surah and ayah when a verse is quoted
+      </label>
+      {(s.caption_lang ?? "original") === "original" && <label className="field">Harakat (tashkeel) in captions
+        <select value={s.harakat ?? "all"} onChange={(e) => ed.update({ harakat: e.target.value as "all" | "quran" | "none" })}>
+          <option value="all">Show everywhere</option>
+          <option value="quran">Only in Quran quotations</option>
+          <option value="none">Hide</option>
+        </select>
+      </label>}
       {(
         <details open={!compact}>
           <summary>Customise look</summary>
@@ -323,7 +367,6 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
             <label className="field">Size {cap.size}<input type="range" min={36} max={110} step={2} value={cap.size} onChange={(e) => patch({ size: +e.target.value })} /></label>
             <label className="field">Corners {cap.radius}<input type="range" min={0} max={60} step={2} value={cap.radius} onChange={(e) => patch({ radius: +e.target.value })} /></label>
             <label className="field">Outline {cap.outline}<input type="range" min={0} max={12} step={1} value={cap.outline} onChange={(e) => patch({ outline: +e.target.value })} /></label>
-            <label className="field">Position {Math.round(cap.y * 100)}%<input type="range" min={0.3} max={0.9} step={0.01} value={cap.y} onChange={(e) => patch({ y: +e.target.value })} /></label>
             <label className="field">Words per caption {cap.max_words}<input type="range" min={1} max={6} step={1} value={cap.max_words} onChange={(e) => patch({ max_words: +e.target.value, max_chars: 8 * +e.target.value })} /></label>
             <label className="field">Font
               <select value={cap.font} onChange={(e) => { patch({ font: e.target.value }); }}>

@@ -2,7 +2,7 @@ export type Range = [number, number];
 
 export interface Job {
   id: string;
-  kind: "download" | "analyze" | "transcribe" | "render" | "cameras";
+  kind: "download" | "analyze" | "transcribe" | "translate" | "render" | "cameras";
   status: "queued" | "running" | "done" | "error";
   progress: number;
   stage: string;
@@ -67,6 +67,10 @@ export interface ShortSettings {
   zoom: number;
   grade: boolean;
   captions: boolean;
+  speed?: number;   // export speed (voice pitch kept)
+  harakat?: "all" | "quran" | "none";  // tashkeel in captions
+  caption_lang?: string;  // "original", or a translation's language ("en", "ar")
+  quran_tag?: boolean;    // surah and ayah on screen while a Quran verse is quoted
 }
 
 export interface Short extends ShortSettings {
@@ -85,11 +89,38 @@ export interface Estimate {
   segments: Range[];
 }
 
-export interface Word { w: string; s: number; e: number }
+export interface Word {
+  w: string; s: number; e: number; quran?: string; spoken?: string;
+  /** recognisers disagreed: "doubt" = no other model heard this word; "voted" = replaced by what two others heard */
+  flag?: "doubt" | "voted";
+  alts?: string[];  // what the other recognisers heard (or, for "voted", the original reading)
+}
+export interface Source {
+  type: "quran" | "hadith";
+  w0: number; w1: number;
+  ref: string | null;      // "البقرة 2:93" / "Sahih al-Bukhari 755"
+  url: string | null;
+  grade?: string | null;
+  text?: string | null;    // exact Quran text / the hadith's reference wording
+  english?: string;
+  cued?: boolean;
+  places?: number;        // Quran words found in this many places (ref starts with "~": no surah/ayah claimed)
+  keep_spoken?: boolean;  // Quran with the lecturer's own harakat (a reading he is discussing)
+}
 export interface Transcript {
   language: string;
   words: Word[];
   segments: { s: number; e: number; w0: number; w1: number; edited?: boolean }[];
+  sources?: Source[];
+  engine?: "whisper" | "tashkeel";
+}
+
+export interface Translation {
+  lang: string;
+  source_lang: string;
+  model: string;
+  quran: string;  // published Quran translation used for whole verses
+  segments: { text: string; source: string; edited?: boolean }[];  // per sentence; `source` = the text it was made from
 }
 
 export interface Camera {
@@ -123,8 +154,8 @@ const json = (body: unknown, method = "POST"): RequestInit => ({
 });
 
 export const defaultSettings = (name = "Short 1"): ShortSettings => ({
-  name, ranges: [], title: null, style: "box", style_data: null, min_gap: 0.4,
-  transition: "morph", transition_frames: 4, zoom: 1, grade: false, captions: true,
+  name, ranges: [], title: null, style: "pill", style_data: null, min_gap: 0.4,
+  transition: "morph", transition_frames: 4, zoom: 1, grade: false, captions: true, speed: 1, harakat: "all", quran_tag: true,
 });
 
 export const api = {
@@ -144,7 +175,11 @@ export const api = {
   transcript: (id: string) => req<Transcript>(`/api/lectures/${id}/transcript`),
   editSegment: (id: string, k: number, text: string | null) =>
     req<Transcript>(`/api/lectures/${id}/transcript/segments/${k}`, json({ text }, "PUT")),
-  transcribe: (id: string) => req<Job>(`/api/lectures/${id}/transcribe`, { method: "POST" }),
+  translation: (id: string, lang: string) => req<Translation>(`/api/lectures/${id}/translation/${lang}`),
+  editTranslation: (id: string, lang: string, k: number, text: string) =>
+    req<Translation>(`/api/lectures/${id}/translation/${lang}/segments/${k}`, json({ text }, "PUT")),
+  translate: (id: string, lang: string) => req<Job>(`/api/lectures/${id}/translate?lang=${lang}`, { method: "POST" }),
+  transcribe: (id: string, engine = "tashkeel") => req<Job>(`/api/lectures/${id}/transcribe?engine=${engine}`, { method: "POST" }),
   estimate: (id: string, s: ShortSettings) => req<Estimate>(`/api/lectures/${id}/estimate`, json(s)),
   preview: async (id: string, body: object) => {
     const r = await fetch(`/api/lectures/${id}/preview`, json(body));

@@ -25,7 +25,7 @@ _STAGES = {"transcribe": (0.0, 0.15), "plan": (0.15, 0.2), "cut": (0.2, 0.35),
 class ShortOptions:
     ranges: list[tuple[float, float]]
     title: str | None = None
-    style: str = "box"               # preset name or path to a style .json
+    style: str = "pill"              # preset name or path to a style .json
     style_data: dict | None = None   # inline style (same shape as the .json), wins over `style`
     font: str | None = None
     min_gap: float = 0.40
@@ -33,6 +33,10 @@ class ShortOptions:
     transition_frames: int = 4
     zoom: float = 1.0
     grade: bool = False
+    speed: float = 1.0               # export speed (voice pitch is kept)
+    harakat: str = "all"             # tashkeel in captions: all | quran (Quran only) | none
+    caption_lang: str = "original"   # "original", or a translation's language code ("en", "ar")
+    quran_tag: bool = True           # show the surah and ayah while a Quran verse is quoted
     captions: bool = True
     language: str | None = "ar"
     model: str = "large-v3"
@@ -57,6 +61,49 @@ def resolve_style(o: ShortOptions) -> Style:
         style = replace(style, captions=replace(style.captions, font=o.font),
                         title=replace(style.title, font=o.font))
     return style
+
+
+def caption_words(words: list[dict], harakat: str) -> list[dict]:
+    """Words as they should appear in captions (tashkeel kept, Quran-only, or removed)."""
+    if harakat == "all":
+        return words
+    import re
+
+    strip = re.compile(r"[\u064B-\u065F\u0670\u06D6-\u06ED]")
+    return [w if (harakat == "quran" and w.get("quran")) else {**w, "w": strip.sub("", w["w"])} for w in words]
+
+
+def translated_words(video: Path, lang: str) -> list[dict]:
+    """Caption words from a saved translation of the full transcript."""
+    from .translate import load, timed_words
+
+    tr = load(video, lang)
+    if tr is None or not words_path(video).exists():
+        raise ValueError(f"no {lang} translation of this lecture yet")
+    return timed_words(json.loads(words_path(video).read_text(encoding="utf-8")), tr)
+
+
+def quran_tags(words: list[dict], segs, fps, d: int, lang: str = "ar") -> list[tuple[float, float, str]]:
+    """(start, end, label) in output time for every quoted Quran passage in the short."""
+    from .sources import quran_label
+
+    tags: list[tuple[float, float, str]] = []
+    i = 0
+    while i < len(words):
+        ref = words[i].get("quran")
+        j = i
+        while j < len(words) and words[j].get("quran") == ref:
+            j += 1
+        if ref:
+            m = map_words(words[i:j], segs, fps, d)
+            if m:
+                label = quran_label(ref, lang)
+                a, b = min(w[1] for w in m), max(w[2] for w in m)
+                if tags and tags[-1][2] == label and a - tags[-1][1] < 1.0:
+                    a = tags.pop()[0]
+                tags.append((a, b, label))
+        i = j
+    return tags
 
 
 def get_words(video: Path, o: ShortOptions, progress: Progress | None = None) -> list[dict]:
@@ -94,6 +141,8 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
     """Render the short. `report` (optional) receives the exact plan used —
     segments, transitions and the crop of every frame — for verification."""
     words = get_words(video, o, progress)
+    if o.captions and o.caption_lang != "original":
+        words = translated_words(video, o.caption_lang)
     # cut exactly as the editor previewed it: the plan only uses the lecture's
     # full transcript (as the estimate/preview does), never range-only words
     plan_words = load_words(video) if words_path(video).exists() else []
@@ -134,14 +183,16 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
         log(f"transitions: {len(windows)} {o.transition}, {hard} hard cuts")
 
         overlay = None
-        if o.captions or o.title:
+        tags = quran_tags(plan_words, segs, fps, d, "ar" if o.caption_lang in ("original", "ar") else o.caption_lang) \
+            if o.quran_tag else []
+        if o.captions or o.title or tags:
             style = resolve_style(o)
-            chunks = chunk(map_words(words, segs, fps, d), style.captions) if o.captions else []
-            overlay = Overlay(chunks, style, o.title)
+            chunks = chunk(map_words(caption_words(words, o.harakat), segs, fps, d), style.captions) if o.captions else []
+            overlay = Overlay(chunks, style, o.title, tags)
 
         cb = _stage(progress, "render")
         render_vertical(cut, path, fps, windows, d, overlay, out, o.grade,
-                        on_frame=lambda i: cb(i / n_out))
+                        on_frame=lambda i: cb(i / n_out), speed=o.speed)
         cb(1.0)
         if report is not None:
             report.write_text(json.dumps({
@@ -151,7 +202,7 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
                 "xs": path.xs.tolist(), "ys": path.ys.tolist(),
                 "cws": path.cws.tolist(), "chs": path.chs.tolist(),
             }))
-        return {"duration": float(n_out / fps), "cuts": len(segs) - 1,
+        return {"duration": float(n_out / fps) / o.speed, "cuts": len(segs) - 1,
                 "hard_cuts": hard, "camera_changes": len(path.camera_changes)}
     finally:
         if keep_temp:

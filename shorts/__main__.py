@@ -21,7 +21,7 @@ def cmd_make(a) -> None:
     o = ShortOptions(
         ranges=[parse_range(r) for r in a.range], title=a.title, style=a.style, font=a.font,
         min_gap=a.min_gap, transition=a.transition, transition_frames=a.transition_frames,
-        zoom=a.zoom, grade=a.grade, captions=not a.no_captions,
+        zoom=a.zoom, grade=a.grade, captions=not a.no_captions, speed=a.speed,
         language=a.lang or None, model=a.model, device=a.device)
     if not a.no_lock:
         print("finding the lecturer and the camera positions (cached after the first run) ...")
@@ -56,7 +56,8 @@ def main() -> None:
     m.add_argument("--transition-frames", "--fade-frames", type=int, default=4,
                    help="length of each transition in frames")
     m.add_argument("--zoom", type=float, default=1.0, help=">1 for a tighter crop")
-    m.add_argument("--style", default="box",
+    m.add_argument("--speed", type=float, default=1.0, help="export speed, e.g. 1.25 (voice pitch is kept)")
+    m.add_argument("--style", default="pill",
                    help="caption preset (box, pill, outline, minimal) or a style .json")
     m.add_argument("--font", help="override the style font (fontconfig name or .ttf path)")
     m.add_argument("--grade", action="store_true", help="punchier contrast/sharpen/vignette")

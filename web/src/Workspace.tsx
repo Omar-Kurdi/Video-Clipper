@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Range } from "./api";
 import { RenderButton, TopBar, type Ed } from "./Editor";
 import { CaptionsPanel, ClipList, CutsPanel, FramingPanel, Preview, Stats, cropWidth } from "./panels";
-import { at, trackFor, type Track } from "./Quick";
+import { VolumeControl } from "./Volume";
+import { SpeedPicker, at, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
 import { clamp, fmt, normalize } from "./util";
 
@@ -22,6 +23,8 @@ export function Workspace({ ed }: { ed: Ed }) {
   const [sel, setSel] = useState<Range | null>(null);
   const [view, setView] = useState<Range>([0, Math.min(duration || 120, 120)]);
   const [tab, setTab] = useState<Tab>("cuts");
+  const [rate, setRate] = useState(1);
+  useEffect(() => { if (video.current) { video.current.playbackRate = rate; video.current.preservesPitch = true; } }, [rate]);
   const stopAt = useRef<number | null>(null);
 
   // ----- playback -----
@@ -205,10 +208,12 @@ export function Workspace({ ed }: { ed: Ed }) {
             <span className="tc dim">/ {fmt(duration, 2)}</span>
             <button type="button" className="btn small" onClick={() => seek(time - 5)} aria-label="Back 5 seconds">−5s</button>
             <button type="button" className="btn small" onClick={() => seek(time + 5)} aria-label="Forward 5 seconds">+5s</button>
+            <SpeedPicker value={rate} onChange={setRate} />
             <span className="grow" />
             <button type="button" className="btn small" onClick={markIn}><kbd>I</kbd> Mark in</button>
             <button type="button" className="btn small" onClick={markOut}><kbd>O</kbd> Mark out</button>
           </div>
+          <VolumeControl getMedia={() => [video.current]} />
           {sel && (
             <div className="sel-strip" role="toolbar" aria-label="Selection">
               <span className="tc">{fmt(sel[0], 1)} – {fmt(sel[1], 1)}</span>
@@ -255,6 +260,10 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
   const [query, setQuery] = useState("");
   const [hitIdx, setHitIdx] = useState(0);
   const [follow, setFollow] = useState(true);
+  const [showTr, setShowTr] = useState(true);
+  const [showDoubt, setShowDoubt] = useState(true);
+  const [editingTr, setEditingTr] = useState<number | null>(null);
+  const [trDraft, setTrDraft] = useState("");
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -359,6 +368,16 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
 
   const ranges = s?.ranges ?? [];
   const minGap = s?.min_gap ?? 0.4;
+  // Quran / hadith marks: word index -> kind, and the span starting at a word
+  const marks = useMemo(() => {
+    const kind = new Map<number, "quran" | "hadith">();
+    const starts = new Map<number, import("./api").Source>();
+    for (const sp of tr?.sources ?? []) {
+      for (let i = sp.w0; i < sp.w1; i++) kind.set(i, sp.type);
+      starts.set(sp.w0, sp);
+    }
+    return { kind, starts };
+  }, [tr]);
   const body = useMemo(() => {
     if (!tr) return null;
     const inShort = (t: number) => ranges.some(([a, b]) => t >= a && t <= b);
@@ -394,14 +413,50 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
             : " ");
         }
         const mid = (w.s + w.e) / 2;
-        const cls = [inShort(mid) ? "in" : "", hitSet.has(i) ? "hit" : "", inSel(mid) ? "picked" : ""].join(" ").trim();
-        parts.push(<span key={i} data-i={i} className={cls || undefined}>{w.w}</span>);
+        const src = marks.starts.get(i);
+        if (src) parts.push(<SourceBadge key={`b${i}`} src={src} />);
+        const mk = marks.kind.get(i);
+        const cls = [inShort(mid) ? "in" : "", hitSet.has(i) ? "hit" : "", inSel(mid) ? "picked" : "",
+          mk === "quran" ? "qw" : mk === "hadith" ? "hw" : "", showDoubt && w.flag && !seg.edited ? `fl-${w.flag}` : ""].join(" ").trim();
+        const tip = w.spoken ? `heard as: ${w.spoken}`
+          : showDoubt && w.flag === "doubt" ? `Likely wrong: the other recognisers heard ${(w.alts ?? []).join(" / ") || "nothing here"}`
+          : showDoubt && w.flag === "voted" ? `Changed: two recognisers agreed on this; the first reading was ${(w.alts ?? []).join(" / ")}`
+          : undefined;
+        parts.push(<span key={i} data-i={i} className={cls || undefined} title={tip}>{w.w}</span>);
       }
       const whole = sel && segRange(k)[0] >= sel[0] - 0.01 && segRange(k)[1] <= sel[1] + 0.01;
+      const trSeg = showTr ? ed.translation?.segments[k] : undefined;
+      const stale = trSeg && trSeg.source !== tr.words.slice(seg.w0, seg.w1).map((w) => w.w).join(" ");
       return (
         <div className={`para ${whole ? "picked" : ""}`} key={k} data-seg={k} onDoubleClick={() => startEdit(k)}>
           <button type="button" className="ts" dir="ltr" onClick={() => { seek(seg.s); play(); }} aria-label={`Play from ${fmt(seg.s)}`}>{fmt(seg.s)}</button>
+          <div className="para-body">
           <p>{parts}{seg.edited && <span className="edited-tag" dir="ltr">edited</span>}</p>
+          {trSeg && (editingTr === k ? (
+            <div className="seg-edit tr-edit" onDoubleClick={(e) => e.stopPropagation()} onMouseUp={(e) => e.stopPropagation()}>
+              <textarea dir={ed.translationLang === "ar" ? "rtl" : "ltr"} lang={ed.translationLang} value={trDraft} autoFocus
+                rows={Math.max(2, Math.ceil(trDraft.length / 60))} aria-label="Edit translation"
+                onChange={(e) => setTrDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (trDraft.trim()) ed.editTranslation(k, trDraft).then(() => setEditingTr(null)); }
+                  if (e.key === "Escape") { e.preventDefault(); setEditingTr(null); }
+                }} />
+              <div className="seg-edit-bar">
+                <button type="button" className="btn small accent" disabled={!trDraft.trim()} onClick={() => ed.editTranslation(k, trDraft).then(() => setEditingTr(null))}>Save <kbd>↵</kbd></button>
+                <button type="button" className="btn small" onClick={() => setEditingTr(null)}>Cancel <kbd>Esc</kbd></button>
+              </div>
+            </div>
+          ) : (
+            <p className="para-tr" lang={ed.translationLang} dir={ed.translationLang === "ar" ? "rtl" : "ltr"} title="Double-click to edit the translation"
+              onDoubleClick={(e) => { e.stopPropagation(); setTrDraft(trSeg.text); setEditingTr(k); }}>
+              {trSeg.text}
+              {trSeg.edited && <span className="edited-tag" dir="ltr">edited</span>}
+              {stale && <span className="edited-tag" dir="ltr" title="This sentence was edited after it was translated. Translate again to update.">out of date</span>}
+              <button type="button" className="icon tr-pen" aria-label="Edit this translation" title="Edit translation (or double-click)"
+                onClick={(e) => { e.stopPropagation(); setTrDraft(trSeg.text); setEditingTr(k); }}>✎</button>
+            </p>
+          ))}
+          </div>
           <span className="para-tools">
             <button type="button" className="icon" aria-label="Edit this sentence" title="Edit text (or double-click)" onClick={() => startEdit(k)}>✎</button>
           </span>
@@ -409,7 +464,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel, editing, draft, saving]);
+  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel, editing, draft, saving, marks, showTr, ed.translation, editingTr, trDraft, showDoubt]);
 
   const lang = tr?.language ?? ed.lecture.language ?? "ar";
   const rtl = ["ar", "fa", "ur", "he"].includes(lang);
@@ -426,7 +481,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
               <progress max={1} value={ed.transcribeJob.progress} />
             </div>
           ) : (
-            <button type="button" className="btn primary" onClick={ed.transcribe}>Transcribe lecture</button>
+            <button type="button" className="btn primary" onClick={() => ed.transcribe()}>Transcribe lecture</button>
           )}
           <p className="muted small">You can already pick moments on the timeline; captions for your clips are transcribed when you render.</p>
         </div>
@@ -443,9 +498,16 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
             <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx - 1)} aria-label="Previous match">↑</button>
             <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx + 1)} aria-label="Next match">↓</button>
           </div>
+          <TranscriptInfo ed={ed} showTr={showTr} setShowTr={setShowTr} />
           <div className="howto">
             <span><b>Click</b> a sentence to select</span><span><b>Shift+click</b> to extend</span>
-            <span><b>Double-click</b> to fix text</span>
+            <span><b>Double-click</b> to fix text{ed.translation && showTr ? " or translation" : ""}</span>
+            {tr.words.some((w) => w.flag) && (
+              <label className="follow" title="Words the recognisers disagreed on. Red: likely wrong. Amber: changed by majority. Hover a word to see what else was heard. Not every mistake is caught.">
+                <input type="checkbox" checked={showDoubt} onChange={(e) => setShowDoubt(e.target.checked)} />
+                Mark <span className="fl-doubt">doubtful</span> words
+              </label>
+            )}
             <label className="follow"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />Follow playback</label>
           </div>
           <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""}`} onMouseUp={onMouseUp}>
@@ -454,5 +516,74 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
         </>
       )}
     </section>
+  );
+}
+
+
+function SourceBadge({ src }: { src: import("./api").Source }) {
+  const [open, setOpen] = useState(false);
+  if (src.type === "quran") {
+    const where = src.ref?.startsWith("~");
+    const title = where ? `Quran: these words appear in ${src.places ?? "several"} places, so no surah/ayah is shown`
+      : src.keep_spoken ? "Quran: the lecturer's own harakat are kept (he is discussing a reading)"
+      : "Quran: replaced with the exact mushaf text";
+    return (
+      <a className="src-badge quran" href={src.url ?? undefined} target="_blank" rel="noreferrer" dir="rtl"
+        title={title} onMouseUp={(e) => e.stopPropagation()}>
+        ﴿ {where ? "قرآن" : src.ref} ﴾
+      </a>
+    );
+  }
+  return (
+    <span className="src-badge hadith" dir="ltr" onMouseUp={(e) => e.stopPropagation()}>
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}>
+        Hadith{src.ref ? ` · ${src.ref}` : " · source not found"}{src.grade ? ` · ${src.grade}` : ""}
+      </button>
+      {open && (
+        <span className="src-pop" dir="auto">
+          {src.text ? <span className="src-ar" dir="rtl" lang="ar">{src.text.length > 600 ? src.text.slice(0, 600) + "…" : src.text}</span>
+            : <span>This sounds like a hadith (it follows a phrase like «قال رسول الله ﷺ»), but it wasn't found in the six books.</span>}
+          {src.english && <span className="src-en">{src.english.length > 400 ? src.english.slice(0, 400) + "…" : src.english}</span>}
+          {src.url && <a href={src.url} target="_blank" rel="noreferrer">Open on sunnah.com</a>}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const LANG_NAME: Record<string, string> = { en: "English", ar: "Arabic" };
+
+function TranscriptInfo({ ed, showTr, setShowTr }: { ed: Ed; showTr: boolean; setShowTr: (v: boolean) => void }) {
+  const tr = ed.transcript!;
+  const q = (tr.sources ?? []).filter((s) => s.type === "quran").length;
+  const h = (tr.sources ?? []).filter((s) => s.type === "hadith").length;
+  const arabic = (tr.language ?? ed.lecture.language) === "ar";
+  return (
+    <div className="tr-info">
+      <span className="muted small">
+        {tr.engine === "tashkeel" ? "Accurate Arabic with harakat" : "Standard transcript"}
+        {(q || h) ? ` · ${q} Quran quotation${q === 1 ? "" : "s"} · ${h} hadith` : ""}
+      </span>
+      {arabic && tr.engine !== "tashkeel" && !ed.transcribeJob && (
+        <button type="button" className="btn small accent" onClick={() => {
+          if (confirm("Re-transcribe with accurate Arabic (with harakat)? Your text corrections in this lecture will be replaced.")) ed.transcribe("tashkeel");
+        }}>Upgrade to accurate Arabic</button>
+      )}
+      {ed.transcribeJob && <span className="small">Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>}
+      <span className="tr-translate">
+        {ed.translateJob ? (
+          <span className="small">Translating… {Math.round(ed.translateJob.progress * 100)}%</span>
+        ) : ed.translation ? (
+          <>
+            <label className="small"><input type="checkbox" checked={showTr} onChange={(e) => setShowTr(e.target.checked)} />Show {LANG_NAME[ed.translationLang]}</label>
+            <button type="button" className="link small" title="Translate again (e.g. after editing sentences)" onClick={() => ed.translate()}>Re-translate</button>
+          </>
+        ) : (
+          <button type="button" className="btn small" disabled={!!ed.transcribeJob}
+            title={`Translate every sentence into ${LANG_NAME[ed.translationLang]} on your GPU. Quran verses use the ${ed.translationLang === "en" ? "Saheeh International" : "published"} translation.`}
+            onClick={() => ed.translate()}>Translate to {LANG_NAME[ed.translationLang]}</button>
+        )}
+      </span>
+    </div>
   );
 }

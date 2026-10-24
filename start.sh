@@ -7,7 +7,7 @@ PID_FILE=.run/server.pid
 LOG=.run/server.log
 
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-  echo "Already running (pid $(cat "$PID_FILE")): $(grep -o 'http://[^ ]*' "$LOG" | head -1)"
+  echo "Already running (pid $(cat "$PID_FILE")): $(grep -ao 'http://[^ ]*' "$LOG" | head -1)"
   exit 0
 fi
 
@@ -24,8 +24,8 @@ echo $! >"$PID_FILE"
 
 # wait for the server to report its address
 for _ in $(seq 1 40); do
-  url=$(grep -o 'http://[^ ]*' "$LOG" | head -1 || true)
-  if [ -n "$url" ] && grep -q "Application startup complete" "$LOG"; then
+  url=$(grep -ao 'http://[^ ]*' "$LOG" | head -1 || true)
+  if [ -n "$url" ] && grep -aq "Application startup complete" "$LOG"; then
     echo "Lecture Shorts is running: $url"
     echo "Stop it with ./stop.sh   (logs: $LOG)"
     exit 0

@@ -131,14 +131,15 @@ export function Landing() {
           </article>
           <article className="mode-card light">
             <div className="mode-art read-art" lang="ar" dir="rtl" aria-hidden="true">
-              <p className="dim">لما بعث ستين أو ثمانين راكبا من قريش</p>
-              <p className="sel">إلا أن سعدا رمى ذلك اليوم <mark>بسهم</mark>، فكان أول من رمى <mark>بسهم</mark> في سبيل الله <span className="pause">1.2s</span></p>
-              <p className="dim">لكن قال ابن هشام مهذب سيرة ابن إسحاق</p>
+              <p className="dim"><span className="q-badge">﴿ الأعراف ٧:١٣٤ ﴾</span> وَلَمَّا وَقَعَ عَلَيْهِمُ ٱلرِّجْزُ قَالُوا۟ يَٰمُوسَى</p>
+              <p className="dim">قَالَ شَكَا أَهْلُ الْكُوفَةِ <mark>سَعْدًا</mark> إِلَى عُمَرَ <span className="pause">0.9s</span></p>
+              <p className="sel">فَأَرْسَلَ إِلَيْهِ فَقَالَ: يَا أَبَا إِسْحَاقَ، إِنَّ هَؤُلَاءِ <span className="doubt">يَزْعُمُونَ</span> أَنَّكَ لَا تُحْسِنُ تُصَلِّي
+                <span className="tr" dir="ltr" lang="en">“O Abu Ishaq, these people claim that you do not pray well.”</span></p>
             </div>
             <span className="eyebrow green">READ &amp; SELECT</span>
             <h3>Transcript</h3>
-            <p>Read the lecture like a document. Search a word, click the sentences you want, and fix any misheard text right there.</p>
-            <ul><li>Search a whole hour in seconds</li><li>Clips start and end on whole sentences</li><li>Corrections flow into the captions</li></ul>
+            <p>Read the lecture like a document, with full harakat. Search a word, click the sentences you want, and fix any doubtful word right there.</p>
+            <ul><li>Quran verses in the exact mushaf text, hadith with their source</li><li>Doubtful words underlined, with what else was heard</li><li>Optional English translation, editable too</li></ul>
           </article>
         </div>
         <button type="button" className="btn dark open-editor" onClick={openEditor}>Open the editor →</button>
@@ -176,7 +177,8 @@ export function Landing() {
         <ol>
           <li><span className="num">01</span><b>Pauses removed, smoothly</b><span>Silences are found from the audio itself and cut out. Each cut is blended with an optical-flow morph, so the speaker never jumps.</span></li>
           <li><span className="num">02</span><b>The frame follows the speaker</b><span>A 9:16 window tracks the speaker's face like a calm camera operator, and switches cleanly on the exact frame the camera changes.</span></li>
-          <li><span className="num">03</span><b>Captions that read right</b><span>Word-timed captions in short chunks, right-to-left for Arabic, with the spoken word highlighted if you want it.</span></li>
+          <li><span className="num">03</span><b>Captions that read right</b><span>Word-timed captions in short chunks, right-to-left for Arabic, with harakat and the spoken word highlighted if you want them, or in English.</span></li>
+          <li><span className="num">04</span><b>Quran named on screen</b><span>While a verse is quoted, a small line above the captions names the surah and ayah, so viewers know it's Quran.</span></li>
         </ol>
       </section>
       <footer className="l-footer">Lecture Shorts · runs on your machine</footer>

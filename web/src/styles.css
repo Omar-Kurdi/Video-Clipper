@@ -101,7 +101,10 @@ progress { width: 100%; height: 6px; accent-color: var(--accent, #1C1B19); }
 .mini-wave { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 26%; display: flex; align-items: center; gap: 2px; }
 .mini-wave span { flex: 1; background: #5D6670; border-radius: 1px; }
 .mini-wave span.sel { background: #F2B544; }
-.read-art { background: #FBFAF7; border: 1px solid #ECE8DF; padding: 14px 20px; font-family: "Noto Naskh Arabic", serif; font-size: 18px; line-height: 1.9; display: flex; flex-direction: column; justify-content: center; }
+.read-art { background: #FBFAF7; border: 1px solid #ECE8DF; padding: 12px 20px; font-family: "Noto Naskh Arabic", serif; font-size: 16px; line-height: 1.8; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.read-art .q-badge { font-size: 12px; color: #1F6F50; background: #E3EFE8; border-radius: 6px; padding: 0 6px; }
+.read-art .doubt { text-decoration: underline wavy rgba(200, 60, 50, 0.85); text-underline-offset: 6px; }
+.read-art .tr { display: block; font-family: "IBM Plex Sans", sans-serif; font-size: 12.5px; line-height: 1.4; color: #6B665C; text-align: left; }
 .read-art p { margin: 0; }
 .read-art .dim { color: #8A857B; }
 .read-art .sel { background: #E3EFE8; border-right: 3px solid #1F6F50; border-radius: 8px; padding-right: 10px; }
@@ -281,6 +284,7 @@ input.time { width: 86px; height: 28px; border-radius: 6px; border: 1px solid va
 .quick-frame { position: relative; cursor: pointer; }
 .quick-frame > video { position: absolute; left: 0; top: 0; max-width: none; object-fit: fill; transform-origin: 0 0; }
 .q-cap { position: absolute; left: 50%; transform: translate(-50%, -50%); white-space: nowrap; line-height: 1.5; pointer-events: none; }
+.q-tag { color: #FFD54A; font-weight: 700; background: transparent; text-shadow: 0 1px 6px rgba(0,0,0,0.85); }
 .q-play { position: absolute; inset: 0; display: grid; place-content: center; font-size: 34px; color: rgba(255,255,255,0.9); text-shadow: 0 2px 12px rgba(0,0,0,0.6); }
 .q-exact { position: absolute; inset: 0; background: #000; display: flex; flex-direction: column; }
 .q-exact video { flex: 1; width: 100%; object-fit: cover; min-height: 0; }
@@ -374,3 +378,37 @@ input.time { width: 86px; height: 28px; border-radius: 6px; border: 1px solid va
 .transcript-panel { overflow-x: hidden; }
 
 .q-scrub { width: 100%; max-width: 270px; accent-color: var(--accent); }
+
+.speed-pick { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: var(--sunk); border: 1px solid var(--line); }
+.speed-pick button { border: 0; background: transparent; color: var(--muted); font-size: 12px; height: 24px; padding: 0 7px; border-radius: 6px; }
+.speed-pick button[aria-pressed="true"] { background: var(--raised); color: var(--fg); font-weight: 600; }
+.speed-pick .small { padding: 0 6px; }
+
+.quick 
+/* Quran / hadith in the transcript */
+.ws .transcript span.qw { color: #9FE0B8; }
+.ws .transcript span.hw { color: #B9D6FF; }
+.src-badge { display: inline-flex; align-items: center; margin: 0 4px; vertical-align: middle; font-family: "IBM Plex Sans", "Noto Naskh Arabic", sans-serif; font-size: 11px; position: relative; }
+.src-badge.quran { color: #0F1113; background: #8FD3A6; border-radius: 6px; padding: 1px 7px; text-decoration: none; font-family: "Amiri", "Noto Naskh Arabic", serif; font-size: 13px; }
+.src-badge.hadith button { border: 0; border-radius: 6px; padding: 2px 7px; background: #6FB6FF; color: #0F1113; font-size: 11px; font-weight: 600; cursor: pointer; }
+.src-pop { position: absolute; z-index: 20; top: 120%; inset-inline-start: 0; width: 340px; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+  background: #1A1E22; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,0.5); font-size: 12px; line-height: 1.6; color: var(--fg); }
+.src-ar { font-family: "Noto Naskh Arabic", serif; font-size: 15px; line-height: 1.9; }
+.src-en { color: var(--muted); }
+.tr-info { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.tr-translate { display: flex; gap: 10px; align-items: center; margin-inline-start: auto; }
+.tr-translate label { display: flex; gap: 4px; align-items: center; }
+.para-tr { margin: 2px 0 0; color: var(--muted); font-size: 0.92em; line-height: 1.45; }
+.para-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.para-body > p { margin: 0; }
+.tr-edit { margin-top: 4px; }
+.tr-pen { width: 20px; height: 20px; font-size: 11px; margin-inline-start: 6px; opacity: 0; vertical-align: middle; }
+.para:hover .tr-pen, .tr-pen:focus-visible { opacity: 1; }
+/* recogniser disagreement (see Word.flag) */
+.fl-doubt { text-decoration: underline wavy rgba(239, 83, 80, 0.9); text-decoration-thickness: 1.5px; text-underline-offset: 7px; }
+.fl-voted { text-decoration: underline dotted rgba(255, 193, 7, 0.9); text-decoration-thickness: 2px; text-underline-offset: 7px; }
+.vol { display: flex; align-items: center; gap: 6px; }
+.quick .vol { max-width: 270px; }
+.vol-val { font-size: 11px; color: var(--muted); min-width: 34px; }
+.vol input[type=range] { width: 84px; accent-color: var(--accent); }
+.vol-mute { width: 26px; height: 26px; font-size: 14px; }
