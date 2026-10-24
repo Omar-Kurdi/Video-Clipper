@@ -412,3 +412,5 @@ input.time { width: 86px; height: 28px; border-radius: 6px; border: 1px solid va
 .vol-val { font-size: 11px; color: var(--muted); min-width: 34px; }
 .vol input[type=range] { width: 84px; accent-color: var(--accent); }
 .vol-mute { width: 26px; height: 26px; font-size: 14px; }
+.fl-gemini { text-decoration: underline solid rgba(66, 165, 245, 0.9); text-decoration-thickness: 2px; text-underline-offset: 7px; }
+.err-text { color: #E57373; }

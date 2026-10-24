@@ -308,6 +308,26 @@ def edit_translation_segment(lid: str, lang: str, k: int, body: TranslationEditI
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/features")
+def features():
+    from shorts.proofread import api_key
+    return {"gemini": bool(api_key())}
+
+
+@app.post("/api/lectures/{lid}/proofread")
+def lecture_proofread(lid: str):
+    running = jobs.active(lecture_id=lid, kind="proofread")
+    if running:
+        return running
+    if media.transcript(lid) is None:
+        raise HTTPException(400, "transcribe the lecture first")
+
+    def run(report):
+        report(stage="proofreading")
+        return media.proofread(lid, lambda f: report(progress=f))
+    return jobs.submit("proofread", run, lane="io", lecture_id=lid)
+
+
 @app.post("/api/lectures/{lid}/translate")
 def lecture_translate(lid: str, lang: str = "en"):
     running = jobs.active(lecture_id=lid, kind="translate")

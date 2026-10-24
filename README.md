@@ -88,6 +88,17 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   the video, a small gold line above the captions names the surah and ayah
   while a verse is quoted («سورة البقرة، الآية ٩٣», or "Quran · Al-Baqarah
   2:93" with English captions); it can be turned off.
+- **Proofread with Gemini** (optional, online): with `GEMINI_API_KEY` in
+  `.env` (see `.env.example`; a free key from aistudio.google.com works), the
+  transcript gets a **Proofread doubtful words with Gemini** button. The audio
+  and transcript go to Google's Gemini, which hears the speech and knows Arabic,
+  the Quran and hadith; only the underlined words can change (blue underline,
+  its reason on hover), Quran text never; a word misheard as two is joined
+  back («وسوسة هو» → «وسوسته»). One request per 30 minutes of audio. If the
+  model is busy or out of free quota, the next newest Flash model is tried.
+  The key can live in `.env` or `.env.local` (both git-ignored). On the free
+  tier Google may use what you send to improve its products. On the Sa'd test
+  lecture it took word errors from 6.6 % to 6.2 % (letters 4.1 % → 3.3 %).
 - **Translation** (optional): **Translate to English** (or to Arabic, for an
   English lecture) translates every sentence on the GPU with
   Qwen3-4B-Instruct. Whole Quran verses use the Saheeh International
@@ -188,6 +199,7 @@ code: `python tests/test_credits.py` fails when a model or dataset referenced in
 | Harakat (tashkeel) | [NAMAA-Space/Cohere-Speech-Tashkeel-2B](https://huggingface.co/NAMAA-Space/Cohere-Speech-Tashkeel-2B), fine-tuned from [Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) | Apache-2.0 |
 | Second opinion on every word (doubtful-word marks) | [NVIDIA FastConformer Arabic (pcd)](https://huggingface.co/nvidia/stt_ar_fastconformer_hybrid_large_pcd_v1.0), ONNX export [OpenVoiceOS/stt_ar_fastconformer_hybrid_large_pcd_v1.0_onnx](https://huggingface.co/OpenVoiceOS/stt_ar_fastconformer_hybrid_large_pcd_v1.0_onnx), run with [onnx-asr](https://github.com/istupakov/onnx-asr) | CC-BY-4.0 |
 | Pause detection | [Silero VAD](https://github.com/snakers4/silero-vad) (bundled with faster-whisper) | MIT |
+| Proofreading doubtful words (optional, online) | Google [Gemini](https://ai.google.dev) API, newest Flash model your key can use (or `GEMINI_MODEL`) | Google's API terms |
 | Translation | [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) | Apache-2.0 |
 | Face detection | [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (`face_detection_yunet_2023mar.onnx`, OpenCV Zoo) | MIT |
 | Recognising the lecturer | [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (`face_recognition_sface_2021dec.onnx`, OpenCV Zoo) | Apache-2.0 |

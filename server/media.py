@@ -249,7 +249,8 @@ def edit_segment(lid: str, k: int, text: str | None) -> dict:
             raise ValueError("a sentence can't be empty")
         seg.setdefault("orig", old)
         if len(tokens) == len(old):
-            new = [{k: v for k, v in w.items() if k not in ("flag", "alts")} | {"w": t} for w, t in zip(old, tokens)]
+            new = [{k: v for k, v in w.items() if k not in ("flag", "alts", "why", "checked")} | {"w": t}
+                   for w, t in zip(old, tokens)]
         else:
             s0, s1 = seg["s"], seg["e"]
             total = sum(len(t) + 1 for t in tokens)
@@ -292,6 +293,23 @@ def transcript(lid: str) -> dict | None:
         data = annotate(data)
         words_path(src).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return data
+
+
+def proofread(lid: str, report=None) -> dict:
+    """Gemini's readings for the doubtful words, applied and saved."""
+    from shorts.proofread import apply, suggest
+
+    data = transcript(lid)
+    if data is None:
+        raise KeyError("transcript")
+    src = store.source_path(lid)
+    sug = suggest(src, data, store.get_lecture(lid).get("title"), on_progress=report)
+    changed = apply(data, sug)
+    from shorts.sources import annotate
+
+    data = annotate(data)  # a repaired word can complete a verse or a hadith
+    words_path(src).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return {"suggestions": len(sug), "changed": changed}
 
 
 # ---------- live preview of one frame as a short ----------
