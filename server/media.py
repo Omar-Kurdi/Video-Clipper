@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from shorts.captions import Overlay, chunk, style_from_dict
+from shorts.pipeline import caption_words, translated_words
 from shorts.reframe import DETECT_WIDTH, _detector, crop_size
 from shorts.render import compose
 from shorts.transcribe import load_words, words_path
@@ -248,7 +249,7 @@ def edit_segment(lid: str, k: int, text: str | None) -> dict:
             raise ValueError("a sentence can't be empty")
         seg.setdefault("orig", old)
         if len(tokens) == len(old):
-            new = [{**w, "w": t} for w, t in zip(old, tokens)]
+            new = [{k: v for k, v in w.items() if k not in ("flag", "alts")} | {"w": t} for w, t in zip(old, tokens)]
         else:
             s0, s1 = seg["s"], seg["e"]
             total = sum(len(t) + 1 for t in tokens)
@@ -281,6 +282,15 @@ def transcript(lid: str) -> dict | None:
                 segs.append({"s": ws[start]["s"], "e": ws[i - 1]["e"], "w0": start, "w1": i})
                 start = i
         data["segments"] = segs
+    from shorts.sources import SOURCES_VERSION
+
+    if data.get("sources_version") != SOURCES_VERSION:  # find Quran/hadith again with the latest matching
+        from shorts.sources import annotate
+
+        if not data.get("title"):
+            data["title"] = store.get_lecture(lid).get("title")
+        data = annotate(data)
+        words_path(src).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return data
 
 
@@ -350,7 +360,8 @@ def _framing_at(lid: str, frame: np.ndarray, W: int, H: int) -> tuple[float, flo
 
 
 def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom: float,
-                  captions: bool) -> bytes:
+                  captions: bool, harakat: str = "all", caption_lang: str = "original",
+                  quran_tag: bool = True) -> bytes:
     meta = store.get_lecture(lid)
     src = store.source_path(lid)
     W, H = meta["width"], meta["height"]
@@ -366,6 +377,13 @@ def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom:
     chunks = []
     if captions:
         words = load_words(src) if words_path(src).exists() else []
+        if caption_lang != "original":
+            try:
+                words = translated_words(src, caption_lang)
+            except ValueError:
+                words = []
+        else:
+            words = caption_words(words, harakat)
         near = [(w["w"], w["s"], w["e"]) for w in words if t - 2 <= w["s"] <= t + 4]
         if not near:
             near = [("سولت", t, t + 0.4), ("لكم", t + 0.4, t + 0.7), ("انفسكم.", t + 0.7, t + 1.2)]
@@ -374,7 +392,15 @@ def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom:
         cur = next((c for c in chunks if c[0][1] <= t <= c[-1][2] + 0.3), chunks[0])
         t = max(t, cur[0][1] + 0.2)
         chunks = [cur]
-    ov = Overlay(chunks, replace(style, captions=replace(style.captions, fade_ms=0)), title)
+    tags = []
+    if quran_tag and words_path(src).exists():
+        from shorts.sources import quran_label
+
+        qw = [w for w in load_words(src) if w.get("quran") and w["s"] - 1 <= t <= w["e"] + 1]
+        if qw:
+            lang = "ar" if caption_lang in ("original", "ar") else caption_lang
+            tags = [(t - 1, t + 1, quran_label(qw[0]["quran"], lang))]
+    ov = Overlay(chunks, replace(style, captions=replace(style.captions, fade_ms=0)), title, tags)
     ov.apply(img, t)
     ok, jpg = cv2.imencode(".jpg", cv2.resize(img, (540, 960), interpolation=cv2.INTER_AREA),
                            [cv2.IMWRITE_JPEG_QUALITY, 85])

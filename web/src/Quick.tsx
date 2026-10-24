@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type Range, type TextStyle, type Word } from "./api";
+import { api, type Range, type TextStyle, type Transcript, type Translation, type Word } from "./api";
 import type { Ed } from "./Editor";
 import { effectiveCaption } from "./panels";
+import { VolumeControl } from "./Volume";
 import { clamp, fmt } from "./util";
 
 /**
@@ -40,6 +41,23 @@ export function at(track: Track, t: number): [number, number] {
   return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f];
 }
 
+/** Translated sentences as caption words: each sentence's words share its
+ * time span by length (same as the server's translate.timed_words). */
+function translatedWords(tr: Transcript, t: Translation): Word[] {
+  const out: Word[] = [];
+  tr.segments.forEach((g, k) => {
+    const toks = (t.segments[k]?.text ?? "").split(/\s+/).filter(Boolean);
+    const total = toks.reduce((a, w) => a + w.length + 1, 0);
+    let at = g.s;
+    for (const w of toks) {
+      const dur = ((g.e - g.s) * (w.length + 1)) / total;
+      out.push({ w, s: at, e: at + dur * 0.95 });
+      at += dur;
+    }
+  });
+  return out;
+}
+
 function chunks(words: Word[], ranges: Range[], ts: TextStyle): Word[][] {
   const inside = words.filter((w) => ranges.some(([a, b]) => w.e > a && w.s < b));
   const out: Word[][] = [];
@@ -57,6 +75,32 @@ function chunks(words: Word[], ranges: Range[], ts: TextStyle): Word[][] {
 }
 
 const rtl = (s: string) => /[֐-ࣿיִ-ﻼ]/.test(s);
+
+const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩";
+const SURAH_EN = ("Al-Fatihah Al-Baqarah Aal_Imran An-Nisa Al-Ma'idah Al-An'am Al-A'raf Al-Anfal At-Tawbah Yunus Hud Yusuf " +
+  "Ar-Ra'd Ibrahim Al-Hijr An-Nahl Al-Isra Al-Kahf Maryam Ta-Ha Al-Anbiya Al-Hajj Al-Mu'minun An-Nur Al-Furqan " +
+  "Ash-Shu'ara An-Naml Al-Qasas Al-Ankabut Ar-Rum Luqman As-Sajdah Al-Ahzab Saba Fatir Ya-Sin As-Saffat Sad " +
+  "Az-Zumar Ghafir Fussilat Ash-Shura Az-Zukhruf Ad-Dukhan Al-Jathiyah Al-Ahqaf Muhammad Al-Fath Al-Hujurat " +
+  "Qaf Adh-Dhariyat At-Tur An-Najm Al-Qamar Ar-Rahman Al-Waqi'ah Al-Hadid Al-Mujadilah Al-Hashr Al-Mumtahanah " +
+  "As-Saff Al-Jumu'ah Al-Munafiqun At-Taghabun At-Talaq At-Tahrim Al-Mulk Al-Qalam Al-Haqqah Al-Ma'arij Nuh " +
+  "Al-Jinn Al-Muzzammil Al-Muddaththir Al-Qiyamah Al-Insan Al-Mursalat An-Naba An-Nazi'at Abasa At-Takwir " +
+  "Al-Infitar Al-Mutaffifin Al-Inshiqaq Al-Buruj At-Tariq Al-A'la Al-Ghashiyah Al-Fajr Al-Balad Ash-Shams " +
+  "Al-Layl Ad-Duha Ash-Sharh At-Tin Al-Alaq Al-Qadr Al-Bayyinah Az-Zalzalah Al-Adiyat Al-Qari'ah At-Takathur " +
+  "Al-Asr Al-Humazah Al-Fil Quraysh Al-Ma'un Al-Kawthar Al-Kafirun An-Nasr Al-Masad Al-Ikhlas Al-Falaq An-Nas").split(" ");
+
+/** Same text as the render's tag (shorts/sources.py quran_label). */
+function quranLabel(ref: string, lang: string): string {
+  if (ref.startsWith("~")) return lang === "ar" ? "من القرآن الكريم" : "Quran";  // fits several places
+  const cut = ref.lastIndexOf(" ");
+  const name = ref.slice(0, cut), num = ref.slice(cut + 1);
+  const [surah, ayat = ""] = num.split(":");
+  if (lang !== "ar") {
+    const en = SURAH_EN[+surah - 1];
+    return en ? `Quran · ${en.replace("_", " ")} ${num}` : `Quran ${num}`;
+  }
+  const digits = ayat.replace(/[0-9]/g, (d) => AR_DIGITS[+d]);
+  return `سورة ${name}، ${ayat.includes("–") ? "الآيات" : "الآية"} ${digits}`;
+}
 
 function textCss(ts: TextStyle, k: number): React.CSSProperties {
   const [family, rest = ""] = ts.font.split(":");
@@ -83,6 +127,9 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   const segs = useMemo(() => ed.estimate?.segments ?? [], [ed.estimate]);
   const fps = ed.lecture.fps || 25;
   const fade = s.transition === "cut" ? 0 : s.transition_frames / fps;
+  // preview speed: follows the export speed unless picked here (watching only)
+  const [rateChoice, setRateChoice] = useState<number | null>(null);
+  const rate = rateChoice ?? (s.speed ?? 1);
   const W = ed.lecture.width ?? 1920, H = ed.lecture.height ?? 1080;
 
   const v0 = useRef<HTMLVideoElement>(null), v1 = useRef<HTMLVideoElement>(null);
@@ -100,8 +147,16 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   const total = segs.reduce((acc, [a, b]) => acc + (b - a), 0) - fade * Math.max(0, segs.length - 1);
   const capStyle = effectiveCaption(ed);
   const titleStyle = effectiveCaption(ed, "title");
-  const capChunks = useMemo(() => (capStyle && ed.transcript && s.captions ? chunks(ed.transcript.words, s.ranges, capStyle) : []),
-    [ed.transcript, s.ranges, s.captions, capStyle?.max_words, capStyle?.max_chars]); // eslint-disable-line react-hooks/exhaustive-deps
+  const capChunks = useMemo(() => {
+    if (!capStyle || !ed.transcript || !s.captions) return [];
+    const lang = s.caption_lang ?? "original";
+    if (lang !== "original") return ed.translation?.lang === lang ? chunks(translatedWords(ed.transcript, ed.translation), s.ranges, capStyle) : [];
+    const h = s.harakat ?? "all";
+    const strip = (t: string) => t.replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, "");
+    const words = h === "all" ? ed.transcript.words
+      : ed.transcript.words.map((w) => (h === "quran" && w.quran ? w : { ...w, w: strip(w.w) }));
+    return chunks(words, s.ranges, capStyle);
+  }, [ed.transcript, ed.translation, s.ranges, s.captions, s.harakat, s.caption_lang, capStyle?.max_words, capStyle?.max_chars]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const place = (v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -135,6 +190,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   // any change to the cut restarts the preview
   useEffect(() => { reset(); setExact(null); setCut(0); }, [JSON.stringify(segs), fade]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { vids().forEach(place); }, [track, s.zoom, width]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { vids().forEach((v) => { if (v) { v.playbackRate = rate; v.preservesPitch = true; } }); }, [rate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!playing) return;
@@ -157,7 +213,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
         }
       }
       if (r.fadeStart != null) {
-        const e = fade ? Math.min(1, (now - r.fadeStart) / 1000 / fade) : 1;
+        const e = fade ? Math.min(1, (now - r.fadeStart) / 1000 / (fade / rate)) : 1;
         B.style.opacity = String(e);
         A.style.opacity = String(1 - e);
         B.volume = e; A.volume = 1 - e;
@@ -233,14 +289,21 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   const chunkIdx = capChunks.findIndex((c, i) => c[0].s <= srcT && srcT < (capChunks[i + 1]?.[0].s ?? Infinity) && srcT < c[c.length - 1].e + 0.3);
   const chunk = chunkIdx >= 0 ? capChunks[chunkIdx] : null;
   const k = width / 1080;
+  // surah/ayah tag while a Quran verse is quoted (as in the render)
+  const qSpan = s.quran_tag === false || !ed.transcript ? null : (ed.transcript.sources ?? []).find((sp) => {
+    if (sp.type !== "quran" || !sp.ref) return false;
+    const ws = ed.transcript!.words;
+    return ws[sp.w0].s - 0.25 <= srcT && srcT < ws[sp.w1 - 1].e + 0.25;
+  }) ?? null;
+  const tagLang = (s.caption_lang ?? "original") === "original" ? "ar" : s.caption_lang!;
 
   if (!segs.length) return <div className="phone-frame" style={{ width, height }}><div className="ph">Add a clip to preview the cut</div></div>;
 
   return (
     <div className="quick">
       <div className="phone-frame quick-frame" style={{ width, height }} onClick={toggle}>
-        <video ref={v0} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline onLoadedMetadata={(e) => place(e.currentTarget)} />
-        <video ref={v1} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline style={{ opacity: 0 }} onLoadedMetadata={(e) => place(e.currentTarget)} />
+        <video ref={v0} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline onLoadedMetadata={(e) => { place(e.currentTarget); e.currentTarget.playbackRate = rate; }} />
+        <video ref={v1} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline style={{ opacity: 0 }} onLoadedMetadata={(e) => { place(e.currentTarget); e.currentTarget.playbackRate = rate; }} />
         {chunk && capStyle && (
           <div className="q-cap" dir={rtl(chunk[0].w) ? "rtl" : "ltr"} style={textCss(capStyle, k)}>
             {chunk.map((w, i) => (
@@ -249,6 +312,13 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
               </span>
             ))}
           </div>
+        )}
+        {qSpan && capStyle && (
+          <div className="q-cap q-tag" dir={tagLang === "ar" ? "rtl" : "ltr"} style={{
+            top: `calc(${capStyle.y * 100}% - ${(capStyle.size * 0.95 + capStyle.pad_y + 30) * k}px)`,
+            fontFamily: `"${capStyle.font.split(":")[0]}", "Noto Sans Arabic", sans-serif`,
+            fontSize: Math.max(26, capStyle.size * 0.5) * k,
+          }}>{quranLabel(qSpan.ref!, tagLang)}</div>
         )}
         {s.title && titleStyle && <div className="q-cap" dir="auto" style={textCss(titleStyle, k)}>{s.title}</div>}
         {!playing && <div className="q-play" aria-hidden="true">▶</div>}
@@ -268,10 +338,13 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
         <button type="button" className="btn small" aria-label="Forward 5 seconds" onClick={() => seekOut(outT + 5)}>+5s</button>
         <span className="tc small">{fmt(outT, 1)} / {fmt(total, 1)}</span>
       </div>
+      <VolumeControl getMedia={() => [v0.current, v1.current]} />
+      <SpeedPicker value={rate} onChange={(r) => setRateChoice(r === (s.speed ?? 1) ? null : r)}
+        note={rateChoice == null && (s.speed ?? 1) !== 1 ? "export speed" : rateChoice != null ? "preview only" : undefined} />
       {segs.length > 1 && (
         <div className="q-exact-row">
-          <label className="sr" htmlFor="cutpick">Cut to check</label>
-          <select id="cutpick" value={clamp(cut, 0, segs.length - 2)} onChange={(e) => setCut(+e.target.value)}>
+          <label className="small" htmlFor="cutpick" title="The instant preview only approximates morph cuts. Pick a pause that was cut out and render just that moment exactly as the export will look.">Check a cut exactly</label>
+          <select id="cutpick" title="Each cut is a pause removed from your clip: its number, where it is in the short, and how long the removed pause was" value={clamp(cut, 0, segs.length - 2)} onChange={(e) => setCut(+e.target.value)}>
             {segs.slice(0, -1).map((g, j) => (
               <option key={j} value={j}>Cut {j + 1} · {fmt(g[1], 1)} ({(segs[j + 1][0] - g[1] + fade).toFixed(1)}s pause)</option>
             ))}
@@ -282,6 +355,18 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
         </div>
       )}
       <p className="muted small q-note">Instant preview: {s.transition === "morph" ? "morphs show as fades here" : s.transition === "fade" ? "fades as rendered" : "jump cuts as rendered"}; framing is approximate.</p>
+    </div>
+  );
+}
+
+export function SpeedPicker({ value, onChange, note }: { value: number; onChange: (r: number) => void; note?: string }) {
+  return (
+    <div className="speed-pick" role="group" aria-label="Playback speed">
+      {[1, 1.25, 1.5, 2].map((r) => (
+        <button key={r} type="button" aria-pressed={Math.abs(value - r) < 0.01} onClick={() => onChange(r)}>{r}×</button>
+      ))}
+      {![1, 1.25, 1.5, 2].some((r) => Math.abs(value - r) < 0.01) && <span className="small">{value.toFixed(2)}×</span>}
+      {note && <span className="muted small">{note}</span>}
     </div>
   );
 }

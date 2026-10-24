@@ -11,8 +11,10 @@ out/
 *.mov
 *.words.json
 *.transcript.txt
+*.translation.*.json
 # downloaded on first run
 models/*.onnx
+models/texts/
 # frontend
 web/node_modules/
 web/dist/

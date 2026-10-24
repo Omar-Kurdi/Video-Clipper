@@ -43,13 +43,31 @@ def _frames(cap: cv2.VideoCapture):
         yield frame
 
 
+def _atempo(speed: float) -> str:
+    """Speed up audio without changing the voice's pitch (atempo takes 0.5-2 per stage)."""
+    stages, s = [], speed
+    while s > 2.0:
+        stages.append("atempo=2.0")
+        s /= 2.0
+    while s < 0.5:
+        stages.append("atempo=0.5")
+        s /= 0.5
+    stages.append(f"atempo={s:.4f}")
+    return ",".join(stages)
+
+
 def render_vertical(cut: Path, path: CropPath, fps: Fraction, windows: dict[int, str], d: int,
-                    overlay: Overlay | None, out: Path, grade: bool, on_frame=None) -> None:
-    vf = ["setsar=1"] + ([GRADE] if grade else []) + ["format=yuv420p"]
+                    overlay: Overlay | None, out: Path, grade: bool, on_frame=None,
+                    speed: float = 1.0) -> None:
+    vf = ["setsar=1"] + ([GRADE] if grade else [])
+    if abs(speed - 1.0) > 1e-3:
+        vf.append(f"setpts=PTS/{speed:.4f}")
+    vf.append("format=yuv420p")
+    audio = ["-af", _atempo(speed), "-shortest"] if abs(speed - 1.0) > 1e-3 else []
     cmd = ["ffmpeg", "-v", "error", "-stats", "-y",
            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{OUT_W}x{OUT_H}", "-r", str(fps), "-i", "-",
            "-i", str(cut), "-map", "0:v", "-map", "1:a",
-           "-vf", ",".join(vf),
+           "-vf", ",".join(vf), *audio, "-r", str(fps),
            *encode_args(19), "-profile:v", "high", "-c:a", "aac", "-b:a", "192k",
            "-movflags", "+faststart", str(out)]
     print("+ ffmpeg (vertical render) ->", out)

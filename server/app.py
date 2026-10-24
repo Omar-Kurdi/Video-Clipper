@@ -17,7 +17,10 @@ from pydantic import BaseModel, Field
 
 from shorts.captions import PRESETS
 from shorts.pipeline import ShortOptions, estimate, make_short
-from shorts.transcribe import load_words, transcribe, words_path
+from shorts.transcribe import load_words, release_whisper, transcribe, words_path
+from shorts.translate import LANGS, translate
+from shorts.translate import edit as edit_translation
+from shorts.translate import load as load_translation
 
 from . import media, store
 from .jobs import Jobs
@@ -72,7 +75,7 @@ class ShortIn(BaseModel):
     name: str = "Untitled short"
     ranges: list[list[float]] = Field(default_factory=list)
     title: str | None = None
-    style: str = "box"
+    style: str = "pill"
     style_data: dict | None = None
     min_gap: float = 0.40
     transition: str = "morph"
@@ -80,15 +83,22 @@ class ShortIn(BaseModel):
     zoom: float = 1.0
     grade: bool = False
     captions: bool = True
+    speed: float = Field(1.0, ge=0.5, le=2.0)  # export speed, voice pitch kept
+    harakat: str = "all"  # tashkeel in captions: all | quran | none
+    caption_lang: str = "original"  # or the language of a saved translation ("en", "ar")
+    quran_tag: bool = True  # surah and ayah on screen while a Quran verse is quoted
 
 
 class PreviewIn(BaseModel):
     t: float
-    style: str = "box"
+    style: str = "pill"
     style_data: dict | None = None
     title: str | None = None
     zoom: float = 1.0
     captions: bool = True
+    harakat: str = "all"
+    caption_lang: str = "original"
+    quran_tag: bool = True
 
 
 class CutPreviewIn(ShortIn):
@@ -108,15 +118,17 @@ def _style_data(style: str, style_data: dict | None) -> dict:
     custom = store.list_styles()
     if style in custom:
         return custom[style]
-    return {"base": style if style in PRESETS else "box"}
+    return {"base": style if style in PRESETS else "pill"}
 
 
 def _options(lecture: dict, s: dict) -> ShortOptions:
     return ShortOptions(
         ranges=[(float(a), float(b)) for a, b in s["ranges"]], title=s.get("title") or None,
-        style_data=_style_data(s.get("style", "box"), s.get("style_data")),
+        style_data=_style_data(s.get("style", "pill"), s.get("style_data")),
         min_gap=s["min_gap"], transition=s["transition"], transition_frames=s["transition_frames"],
-        zoom=s["zoom"], grade=s["grade"], captions=s["captions"], language=lecture.get("language"))
+        zoom=s["zoom"], grade=s["grade"], captions=s["captions"], language=lecture.get("language"),
+        speed=float(s.get("speed", 1.0)), harakat=s.get("harakat", "all"),
+        caption_lang=s.get("caption_lang", "original"), quran_tag=s.get("quran_tag", True))
 
 
 def _analyze_job(lid: str) -> dict:
@@ -250,7 +262,7 @@ def edit_transcript_segment(lid: str, k: int, body: SegmentEditIn):
 
 
 @app.post("/api/lectures/{lid}/transcribe")
-def lecture_transcribe(lid: str):
+def lecture_transcribe(lid: str, engine: str = "tashkeel"):
     meta = store.get_lecture(lid)
     running = jobs.active(lecture_id=lid, kind="transcribe")
     if running:
@@ -261,12 +273,57 @@ def lecture_transcribe(lid: str):
         report(stage="transcribing")
         try:
             transcribe(store.source_path(lid), language=meta.get("language"),
-                       on_progress=lambda f: report(progress=f))
+                       on_progress=lambda f: report(progress=f), engine=engine, title=meta.get("title"))
         except Exception:
             store.update_lecture(lid, transcript="none")
             raise
         store.update_lecture(lid, transcript="ready")
     return jobs.submit("transcribe", run, lecture_id=lid)
+
+
+@app.get("/api/lectures/{lid}/translation/{lang}")
+def lecture_translation(lid: str, lang: str):
+    data = load_translation(store.source_path(lid), lang)
+    if data is None:
+        raise HTTPException(404, "no translation")
+    return data
+
+
+class TranslationEditIn(BaseModel):
+    text: str
+
+
+@app.put("/api/lectures/{lid}/translation/{lang}/segments/{k}")
+def edit_translation_segment(lid: str, lang: str, k: int, body: TranslationEditIn):
+    data = media.transcript(lid)
+    if data is None or not 0 <= k < len(data["segments"]):
+        raise HTTPException(404, "no such sentence")
+    g = data["segments"][k]
+    source = " ".join(w["w"] for w in data["words"][g["w0"]:g["w1"]])
+    try:
+        return edit_translation(store.source_path(lid), lang, k, body.text, source)
+    except IndexError:
+        raise HTTPException(404, "no such sentence")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/lectures/{lid}/translate")
+def lecture_translate(lid: str, lang: str = "en"):
+    running = jobs.active(lecture_id=lid, kind="translate")
+    if running:
+        return running
+    data = media.transcript(lid)
+    if data is None:
+        raise HTTPException(400, "transcribe the lecture first")
+    if lang not in LANGS or lang == (data.get("language") or "ar"):
+        raise HTTPException(400, f"can't translate into {lang}")
+
+    def run(report):
+        report(stage="translating")
+        release_whisper()  # the translation model needs the GPU memory
+        translate(store.source_path(lid), data, lang, on_progress=lambda f: report(progress=f))
+    return jobs.submit("translate", run, lecture_id=lid)
 
 
 @app.post("/api/lectures/{lid}/estimate")
@@ -282,7 +339,8 @@ def lecture_estimate(lid: str, body: ShortIn):
 @app.post("/api/lectures/{lid}/preview")
 def lecture_preview(lid: str, body: PreviewIn):
     jpg = media.preview_frame(lid, body.t, _style_data(body.style, body.style_data),
-                              body.title, body.zoom, body.captions)
+                              body.title, body.zoom, body.captions, body.harakat, body.caption_lang,
+                              body.quran_tag)
     return Response(jpg, media_type="image/jpeg")
 
 

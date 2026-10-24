@@ -91,6 +91,11 @@ def style_from_dict(data: dict) -> Style:
 
 # ---------- timing ----------
 
+# the surah/ayah tag shown while a Quran verse is quoted: small, gold, no box
+TAG_STYLE = TextStyle(size=32, color="#FFD54A", box=False, shadow=6, outline=0, pad_x=8, pad_y=4)
+TAG_FADE = 0.25
+
+
 def map_words(words: list[dict], segs: list[Segment], fps: Fraction, d: int) -> list[Word]:
     """Each word goes to the segment it overlaps most, clipped to that segment."""
     starts = output_starts(segs, d)
@@ -157,6 +162,14 @@ def _font(pattern: str, size: int) -> ImageFont.FreeTypeFont:
     return font
 
 
+def _latin(pattern: str) -> str:
+    """The same font for Latin text, or the closest one that has Latin letters
+    (Arabic fonts such as Noto Sans Arabic have none)."""
+    if Path(pattern).suffix.lower() in (".ttf", ".otf", ".ttc"):
+        return pattern
+    return pattern + ":charset=41-5a 61-7a"
+
+
 @lru_cache(maxsize=None)
 def _ink_extent(pattern: str, size: int, rtl: bool) -> tuple[int, int]:
     """Top/bottom of the inked pixels of typical text drawn at y=0 (tall
@@ -176,9 +189,10 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
     RTL scripts, so punctuation stays at the end of the sentence."""
     rtl = _is_rtl(" ".join(words))
     direction = "rtl" if rtl else "ltr"
+    pattern = ts.font if rtl else _latin(ts.font)
     size = ts.size
     while True:
-        font = _font(ts.font, size)
+        font = _font(pattern, size)
         space = font.getlength(" ", direction=direction)
         widths = [font.getlength(w, direction=direction) for w in words]
         text_w = sum(widths) + space * (len(words) - 1)
@@ -187,7 +201,7 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
         size = int(size * 0.92)
     # size the box from real glyph ink of a fixed reference string, so text is
     # optically centred and every caption box has the same height
-    top, bottom = _ink_extent(ts.font, size, rtl)
+    top, bottom = _ink_extent(pattern, size, rtl)
     margin = ts.shadow * 2 + ts.outline
     W = int(text_w + 2 * ts.pad_x + 2 * margin)
     H = int(bottom - top + 2 * ts.pad_y + 2 * margin)
@@ -243,9 +257,13 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
 class Overlay:
     """Per-frame caption + title compositor for a 1080x1920 BGR frame."""
 
-    def __init__(self, chunks: list[list[Word]], style: Style, title: str | None):
+    def __init__(self, chunks: list[list[Word]], style: Style, title: str | None,
+                 tags: list[tuple[float, float, str]] | None = None):
+        """tags: (start, end, text) shown small above the captions, e.g. the
+        surah and ayah while a Quran verse is quoted."""
         self.chunks = chunks
         self.style = style
+        self.tags = tags or []
         self.starts = [c[0][1] for c in chunks]
         # hold each chunk until the next starts if the gap is short
         self.ends = []
@@ -283,9 +301,28 @@ class Overlay:
         bgr = src[..., 2::-1].astype(np.float32)
         roi[:] = (roi * (1 - a) + bgr * a).astype(np.uint8)
 
+    def _tag(self, t: float):
+        for k, (s, e, text) in enumerate(self.tags):
+            if s - TAG_FADE <= t < e + TAG_FADE:
+                key = ("tag", k)
+                if key not in self._cache:
+                    cap = self.style.captions
+                    ts = replace(TAG_STYLE, font=cap.font, size=max(26, int(cap.size * 0.5)))
+                    img = render_text(tuple(text.split()), ts)
+                    # just above the caption box (its height from a typical line)
+                    cap_h = render_text(("كلمة",), cap).shape[0]
+                    self._cache[key] = (img, cap_h / 2 + img.shape[0] / 2 + 6)
+                img, above = self._cache[key]
+                alpha = min(1.0, (t - (s - TAG_FADE)) / TAG_FADE, ((e + TAG_FADE) - t) / TAG_FADE)
+                return img, above, max(0.0, alpha)
+        return None, 0.0, 0.0
+
     def apply(self, frame: np.ndarray, t: float) -> None:
         if self.title is not None:
             self._blit(frame, self.title, self.style.title.y, 1.0)
+        tag, above, ta = self._tag(t)
+        if tag is not None:
+            self._blit(frame, tag, self.style.captions.y - above / frame.shape[0], ta)
         img, alpha = self._caption(t)
         if img is not None:
             self._blit(frame, img, self.style.captions.y, alpha)
