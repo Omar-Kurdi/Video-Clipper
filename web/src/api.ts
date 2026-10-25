@@ -173,6 +173,7 @@ export const api = {
     fd.append("language", language ?? "");
     return req<Lecture>("/api/lectures/upload", { method: "POST", body: fd });
   },
+  retryImport: (id: string) => req<Lecture>(`/api/lectures/${id}/retry`, { method: "POST" }),
   deleteLecture: (id: string, original = false) =>
     req<{ ok: boolean; freed: number }>(`/api/lectures/${id}${original ? "?original=true" : ""}`, { method: "DELETE" }),
   waveform: (id: string) => req<{ rate: number; peaks: number[] }>(`/api/lectures/${id}/waveform`),

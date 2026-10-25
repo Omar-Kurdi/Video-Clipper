@@ -176,17 +176,38 @@ def lectures():
 @app.post("/api/lectures/url")
 def import_url(body: UrlIn):
     meta = store.new_lecture(body.url, "source.mp4", body.language)
-    lid = meta["id"]
+    store.update_lecture(meta["id"], url=body.url)  # kept so a failed download can be tried again
+    _download_job(meta["id"], body.url)
+    return _lecture_out(store.get_lecture(meta["id"]))
+
+
+def _download_job(lid: str, url: str) -> None:
+    store.update_lecture(lid, status="importing")
 
     def run(report):
         try:
-            res = media.download(body.url, lid, report)
+            res = media.download(url, lid, report)
         except Exception:
             store.update_lecture(lid, status="error")
             raise
         _analyze_job(lid)
         return res
     jobs.submit("download", run, lane="io", lecture_id=lid)
+
+
+@app.post("/api/lectures/{lid}/retry")
+def retry_import(lid: str):
+    """Try a failed import again: download a link again, or analyse the video again."""
+    meta = store.get_lecture(lid)
+    if meta.get("status") != "error":
+        raise HTTPException(409, "this lecture didn't fail")
+    url = meta.get("url") or (meta["title"] if meta["title"].startswith(("http://", "https://")) else None)
+    if url:
+        _download_job(lid, url)
+    elif store.source_path(lid).is_file():
+        _analyze_job(lid)
+    else:
+        raise HTTPException(400, "the video is gone; delete this lecture and add it again")
     return _lecture_out(store.get_lecture(lid))
 
 

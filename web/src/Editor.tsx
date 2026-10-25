@@ -11,8 +11,12 @@ import { fmt, useDebounced, useInterval } from "./util";
 
 export type Mode = "edit";
 
-// lectures opened since this page loaded; a reload starts every editor fresh
-const opened = new Set<string>();
+// the short last worked on in each lecture, reopened next time
+const LAST_KEY = (lid: string) => `last-short:${lid}`;
+function lastShort(lid: string): string | null {
+  try { return localStorage.getItem(LAST_KEY(lid)); } catch { return null; }
+}
+const isEmpty = (s: Short) => !s.ranges.length && !s.rendered;
 
 export interface Ed {
   lecture: Lecture;
@@ -83,11 +87,13 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   const loadCameras = useCallback(() => api.cameras(lectureId).then(setCameras).catch(() => {}), [lectureId]);
   const dirty = useRef<Set<string>>(new Set());
   const initialShort = useRef(shortId);
-  // previous session's shorts, hidden after a reload until restored or discarded
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
 
-  const visible = shorts.filter((s) => !hidden.has(s.id));
-  const current = visible.find((s) => s.id === shortId) ?? visible[0] ?? null;
+  const current = shorts.find((s) => s.id === shortId) ?? null;
+  // empty drafts left from earlier visits aren't listed (they're reused for the next new short)
+  const visible = shorts.filter((s) => !isEmpty(s) || s.id === current?.id);
+  useEffect(() => {
+    if (current) try { localStorage.setItem(LAST_KEY(lectureId), current.id); } catch { /* storage unavailable */ }
+  }, [current?.id, lectureId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTranscript = useCallback(() => api.transcript(lectureId).then(setTranscript).catch(() => setTranscript(null)), [lectureId]);
   const translationLang = (transcript?.language ?? lecture?.language ?? "ar") === "en" ? "ar" : "en";
@@ -104,24 +110,18 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
     refreshStyles();
     loadCameras();
     api.shorts(lectureId).then(async (list) => {
-      const fresh = !opened.has(lectureId);
-      opened.add(lectureId);
-      // a link to one of the previous shorts (from the library) opens the previous session as it was
-      const asked = initialShort.current;
-      const previous = fresh && !list.some((s) => s.id === asked && (s.ranges.length || s.rendered))
-        ? list.filter((s) => s.ranges.length || s.rendered) : [];
-      let draft = list.find((s) => !s.ranges.length && !s.rendered);
-      if (fresh && draft) draft = await api.updateShort(lectureId, draft.id, defaultSettings(draft.name));
-      if (!draft) {
-        draft = await api.createShort(lectureId, defaultSettings(`Short ${list.length + 1}`));
-        list = [...list, draft];
-      } else {
-        list = list.map((s) => (s.id === draft!.id ? draft! : s));
+      // reopen where you left off: the short asked for, else the last one worked on,
+      // else the newest with clips; a new short only when the lecture has none
+      const byId = (id: string | null | undefined) => list.find((s) => s.id === id);
+      let pick = byId(initialShort.current) ?? byId(lastShort(lectureId))
+        ?? [...list].filter((s) => !isEmpty(s)).sort((a, b) => b.created - a.created)[0] ?? list.find(isEmpty);
+      if (!pick) {
+        pick = await api.createShort(lectureId, defaultSettings("Short 1"));
+        list = [...list, pick];
       }
       setShorts(list);
-      if (previous.length) {
-        setHidden(new Set(previous.map((s) => s.id)));
-        history.replaceState(null, "", `#/l/${lectureId}/${mode}/${draft.id}`);
+      if (pick.id !== initialShort.current) {
+        history.replaceState(null, "", `#/l/${lectureId}/${mode}/${pick.id}`);
         dispatchEvent(new HashChangeEvent("hashchange"));
       }
     });
@@ -195,15 +195,20 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       },
       selectShort: (id) => go({ page: "editor", lecture: lectureId, mode, short: id }),
       newShort: async (ranges = []) => {
-        const s = await api.createShort(lectureId, { ...defaultSettings(`Short ${shorts.length + 1}`), ranges,
-          ...(current ? { style: current.style, style_data: current.style_data, title: current.title } : {}) });
-        setShorts((l) => [...l, s]);
+        const settings = { ...defaultSettings(`Short ${visible.filter((s) => !isEmpty(s)).length + 1}`), ranges,
+          ...(current ? { style: current.style, style_data: current.style_data, title: current.title } : {}) };
+        // reuse an empty draft instead of piling up new ones
+        const draft = shorts.find((s) => isEmpty(s) && s.id !== current?.id);
+        const s = draft ? await api.updateShort(lectureId, draft.id, settings) : await api.createShort(lectureId, settings);
+        setShorts((l) => (draft ? l.map((x) => (x.id === s.id ? s : x)) : [...l, s]));
         go({ page: "editor", lecture: lectureId, mode, short: s.id });
       },
       removeShort: async (id) => {
         await api.deleteShort(lectureId, id);
-        setShorts((l) => l.filter((s) => s.id !== id));
-        go({ page: "editor", lecture: lectureId, mode });
+        const rest = shorts.filter((s) => s.id !== id);
+        setShorts(rest);
+        const next = rest.filter((s) => !isEmpty(s)).sort((a, b) => b.created - a.created)[0] ?? rest[0];
+        go({ page: "editor", lecture: lectureId, mode, short: next?.id });
       },
       transcript, waveform, speech, styles, refreshStyles, estimate, jobs, renderJob,
       render: async () => {
@@ -255,40 +260,16 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
         if (t) setTranscript(t);
       },
     };
-  }, [lecture, visible, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
+  }, [lecture, visible, shorts, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
     renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang, gemini]);
 
   if (error && !lecture) return <div className="fatal"><p>{error}</p><a href="#/">Back to library</a></div>;
   if (!ed) return <div className="fatal"><p>Loading…</p></div>;
 
-  const prev = shorts.filter((s) => hidden.has(s.id));
-  const restore = () => {
-    const last = [...prev].sort((a, b) => b.created - a.created)[0];
-    setHidden(new Set());
-    if (last) go({ page: "editor", lecture: lectureId, mode, short: last.id });
-  };
-  const discard = async () => {
-    // drafts go; rendered shorts are finished work and stay
-    for (const s of prev) if (!s.rendered) await api.deleteShort(lectureId, s.id).catch(() => {});
-    setShorts((l) => l.filter((s) => !hidden.has(s.id) || s.rendered));
-    setHidden(new Set());
-  };
-
-  const clips = prev.reduce((n, s) => n + s.ranges.length, 0);
-  const rendered = prev.filter((s) => s.rendered).length;
-  const notice = prev.length > 0 && (
-    <div className="restore" role="status">
-      <span>Last time you had {prev.length} short{prev.length > 1 ? "s" : ""} ({clips} clip{clips === 1 ? "" : "s"}{rendered ? `, ${rendered} rendered` : ""}). This one starts fresh.</span>
-      <button type="button" className="btn small" onClick={restore}>Restore</button>
-      <button type="button" className="btn small ghost" onClick={discard}
-        title="Deletes the drafts; rendered shorts are kept">Discard drafts</button>
-    </div>
-  );
-
   return (
     <>
       {error && <div className="toast" role="alert">{error} <button type="button" aria-label="Dismiss" onClick={() => setError(null)}>✕</button></div>}
-      <Workspace ed={ed} notice={notice || null} />
+      <Workspace ed={ed} />
     </>
   );
 }
@@ -351,9 +332,8 @@ export function RenderButton({ ed }: { ed: Ed }) {
   return (
     <span className="render-wrap">
       <button type="button" className="btn primary" disabled={!ed.short?.ranges.length}
-        title={ed.short?.ranges.length ? undefined : "Add a clip first"}
         onClick={() => (dur > 180 ? setAsking(true) : ed.render())}>
-        Render {ed.short?.name ?? "short"}
+        {ed.short?.ranges.length ? `Render ${ed.short.name}` : "Add a clip to render"}
       </button>
       {asking && (
         <Confirm className="render-ask" tone="warn" action="Render anyway" cancel="Back to editing"

@@ -297,6 +297,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   }) ?? null;
   const tagLang = (s.caption_lang ?? "original") === "original" ? "ar" : s.caption_lang!;
 
+  const note = `Instant preview: ${s.transition === "morph" ? "morphs show as fades here" : s.transition === "fade" ? "fades as rendered" : "jump cuts as rendered"}; framing is approximate.`;
   if (!segs.length) return <div className="phone-frame" style={{ width, height }}><div className="ph">Add a clip to preview the cut</div></div>;
 
   return (
@@ -336,15 +337,17 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
         <button type="button" className="btn small" aria-label="Back 5 seconds" onClick={() => seekOut(outT - 5)}>−5s</button>
         <button type="button" className="btn small" onClick={toggle}>{playing ? "Pause" : run.current.started ? "Resume" : "Play cut"}</button>
         <button type="button" className="btn small" aria-label="Forward 5 seconds" onClick={() => seekOut(outT + 5)}>+5s</button>
-        <span className="tc small">{fmt(outT, 1)} / {fmt(total, 1)}</span>
+        <span className="tc small" title={note}>{fmt(outT, 1)} / {fmt(total, 1)}</span>
       </div>
-      <VolumeControl getMedia={() => [v0.current, v1.current]} />
-      <SpeedPicker value={rate} onChange={(r) => setRateChoice(r === (s.speed ?? 1) ? null : r)}
-        note={rateChoice == null && (s.speed ?? 1) !== 1 ? "export speed" : rateChoice != null ? "preview only" : undefined} />
+      <div className="q-bar">
+        <SpeedPicker value={rate} onChange={(r) => setRateChoice(r === (s.speed ?? 1) ? null : r)}
+          note={rateChoice == null && (s.speed ?? 1) !== 1 ? "export speed" : rateChoice != null ? "preview only" : undefined} />
+        <VolumeControl getMedia={() => [v0.current, v1.current]} />
+      </div>
       {segs.length > 1 && (
-        <div className="q-exact-row">
-          <label className="small" htmlFor="cutpick" title="The instant preview only approximates morph cuts. Pick a pause that was cut out and render just that moment exactly as the export will look.">Check a cut exactly</label>
-          <select id="cutpick" title="Each cut is a pause removed from your clip: its number, where it is in the short, and how long the removed pause was" value={clamp(cut, 0, segs.length - 2)} onChange={(e) => setCut(+e.target.value)}>
+        <details className="q-exact-row">
+          <summary className="small" title={`${note} Pick a pause that was cut out and render just that moment exactly as the export will look.`}>Check a cut exactly</summary>
+          <select id="cutpick" aria-label="Cut to check" title="Each cut is a pause removed from your clip: its number, where it is in the short, and how long the removed pause was" value={clamp(cut, 0, segs.length - 2)} onChange={(e) => setCut(+e.target.value)}>
             {segs.slice(0, -1).map((g, j) => (
               <option key={j} value={j}>Cut {j + 1} · {fmt(g[1], 1)} ({(segs[j + 1][0] - g[1] + fade).toFixed(1)}s pause)</option>
             ))}
@@ -352,9 +355,8 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
           <button type="button" className="btn small" disabled={exactBusy} onClick={renderExact}>
             {exactBusy ? "Rendering…" : "Render this cut exactly"}
           </button>
-        </div>
+        </details>
       )}
-      <p className="muted small q-note">Instant preview: {s.transition === "morph" ? "morphs show as fades here" : s.transition === "fade" ? "fades as rendered" : "jump cuts as rendered"}; framing is approximate.</p>
     </div>
   );
 }

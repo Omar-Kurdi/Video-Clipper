@@ -109,6 +109,7 @@ export function Landing() {
   const shortCount = lectures.reduce((n, l) => n + l.shorts, 0);
   const latest = lectures.find((l) => l.status === "ready");
   const v = value.trim();
+  const returning = lectures.length > 0;
 
   return (
     <div className="landing">
@@ -121,10 +122,13 @@ export function Landing() {
           )}
         </header>
 
-        <section className="hero">
+        {/* the full welcome only until the library has something in it; after that, just the import bar */}
+        <section className={`hero ${returning ? "compact" : ""}`}>
           <div className="hero-copy">
-            <h1>Hour-long lectures in. Shorts people <em>finish</em>, out.</h1>
-            <p className="lede">Mark the moments in red. Pauses are cut with smooth morphs, the frame follows the speaker, and Arabic captions read right to left.</p>
+            {!returning && <>
+              <h1>Hour-long lectures in. Shorts people <em>finish</em>, out.</h1>
+              <p className="lede">Mark the moments in red. Pauses are cut with smooth morphs, the frame follows the speaker, and Arabic captions read right to left.</p>
+            </>}
             <form className="import" onSubmit={submit}>
               <label htmlFor="src" className="eyebrow">Add a lecture</label>
               <div className="import-box">
@@ -149,7 +153,7 @@ export function Landing() {
               <input ref={fileRef} type="file" accept="video/*,.mkv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) upload(f); }} />
             </form>
           </div>
-          <HeroPage thumb={latest ? api.thumbUrl(latest.id) : null} />
+          {!returning && <HeroPage thumb={latest ? api.thumbUrl(latest.id) : null} />}
         </section>
 
         <section ref={libRef} className="library" aria-labelledby="lib-h">
@@ -213,7 +217,9 @@ export function Landing() {
                     )}
                   </div>
                   <div className="lib-actions">
-                    <button type="button" className="btn dark" disabled={l.status !== "ready"} onClick={() => open(l)}>Open</button>
+                    {l.status === "error"
+                      ? <button type="button" className="btn dark" onClick={() => api.retryImport(l.id).then(refresh).catch((e) => setError(e.message))}>Try again</button>
+                      : <button type="button" className="btn dark" disabled={l.status !== "ready"} onClick={() => open(l)}>Open</button>}
                     <button type="button" className="btn" aria-label={`Delete ${l.title}`} title="Delete"
                       onClick={() => setDeleting(deleting === l.id ? null : l.id)}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></svg>

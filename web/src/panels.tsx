@@ -83,7 +83,8 @@ function TimeField({ value, onChange, label }: { value: number; onChange: (v: nu
   );
 }
 
-export function ClipList({ ed, onPlay }: { ed: Ed; onPlay: (r: Range) => void }) {
+/** The short's clips as one row under the timeline, in order, each editable. */
+export function ClipStrip({ ed, onPlay }: { ed: Ed; onPlay: (r: Range) => void }) {
   const s = ed.short;
   if (!s) return null;
   const set = (i: number, r: Range) => {
@@ -91,35 +92,43 @@ export function ClipList({ ed, onPlay }: { ed: Ed; onPlay: (r: Range) => void })
     ed.update({ ranges });
   };
   return (
-    <div className="clips">
-      <div className="clips-head">
-        <label className="name-edit">
-          <span className="sr">Short name</span>
-          <input value={s.name} onChange={(e) => ed.update({ name: e.target.value })} />
-        </label>
-        <span className="muted">{s.ranges.length} clip{s.ranges.length === 1 ? "" : "s"}</span>
-      </div>
-      {s.ranges.length === 0 && <p className="muted small">No clips yet. Select a moment and add it.</p>}
-      <ol className="clip-list">
-        {s.ranges.map((r, i) => (
-          <li key={i}>
-            <span className="idx">{i + 1}</span>
-            <TimeField label={`Clip ${i + 1} start`} value={r[0]} onChange={(v) => set(i, [v, r[1]])} />
-            <span aria-hidden="true">–</span>
-            <TimeField label={`Clip ${i + 1} end`} value={r[1]} onChange={(v) => set(i, [r[0], v])} />
-            <span className="muted">{(r[1] - r[0]).toFixed(1)}s</span>
-            <button type="button" className="icon" aria-label={`Play clip ${i + 1}`} onClick={() => onPlay(r)}>▶</button>
-            <button type="button" className="icon" aria-label={`Remove clip ${i + 1}`} onClick={() => ed.update({ ranges: s.ranges.filter((_, k) => k !== i) })}>✕</button>
-          </li>
-        ))}
-      </ol>
+    <div className="clip-strip">
+      <label className="name-edit" title="Rename this short">
+        <span className="sr">Short name</span>
+        <input value={s.name} onChange={(e) => ed.update({ name: e.target.value })} />
+      </label>
+      {s.ranges.length === 0 ? <span className="muted small">No clips yet. Select a moment, then press Add.</span> : (
+        <ol className="clip-list" aria-label={`Clips in ${s.name}`}>
+          {s.ranges.map((r, i) => (
+            <li key={i}>
+              <span className="idx">{i + 1}</span>
+              <TimeField label={`Clip ${i + 1} start`} value={r[0]} onChange={(v) => set(i, [v, r[1]])} />
+              <span aria-hidden="true">–</span>
+              <TimeField label={`Clip ${i + 1} end`} value={r[1]} onChange={(v) => set(i, [r[0], v])} />
+              <span className="muted">{(r[1] - r[0]).toFixed(1)}s</span>
+              <button type="button" className="icon" aria-label={`Play clip ${i + 1}`} onClick={() => onPlay(r)}>▶</button>
+              <button type="button" className="icon" aria-label={`Remove clip ${i + 1}`} onClick={() => ed.update({ ranges: s.ranges.filter((_, k) => k !== i) })}>✕</button>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
 
-/* ---------- cuts ---------- */
+/** One line of help; the rest behind "More". */
+function Help({ children, more }: { children: React.ReactNode; more?: React.ReactNode }) {
+  return (
+    <div className="help">
+      {children}
+      {more && <details><summary>More</summary>{more}</details>}
+    </div>
+  );
+}
 
-export function CutsPanel({ ed }: { ed: Ed }) {
+/* ---------- pauses ---------- */
+
+export function PausesPanel({ ed }: { ed: Ed }) {
   const s = ed.short;
   if (!s) return null;
   const ms = Math.round((s.transition_frames / (ed.lecture.fps || 25)) * 1000);
@@ -127,7 +136,7 @@ export function CutsPanel({ ed }: { ed: Ed }) {
     <div className="panel">
       <div className="row"><label htmlFor="gap">Cut pauses longer than</label><span className="val">{s.min_gap.toFixed(2)} s</span></div>
       <input id="gap" type="range" min={0.2} max={1.5} step={0.05} value={s.min_gap} onChange={(e) => ed.update({ min_gap: +e.target.value })} />
-      <p className="help">When a pause is cut out, the moment before it and the moment after it are joined. How they're joined:</p>
+      <Help>How the moments either side of a cut pause are joined:</Help>
       <fieldset>
         <legend className="sr">Transition at each cut</legend>
         <div className="seg fill">
@@ -138,11 +147,11 @@ export function CutsPanel({ ed }: { ed: Ed }) {
           ))}
         </div>
       </fieldset>
-      <p className="help">
-        {s.transition === "morph" && "Morph: the speaker's head and hands are smoothly moved from one position to the other, so the join looks like natural movement instead of a jump."}
-        {s.transition === "fade" && "Fade: the two moments blend into each other (a quick dissolve)."}
-        {s.transition === "cut" && "Jump cut: no blending; the picture switches instantly (the classic YouTube jump cut)."}
-      </p>
+      <Help more={s.transition === "morph" ? "The speaker's head and hands are smoothly moved from one position to the other, so the join looks like natural movement instead of a jump." : undefined}>
+        {s.transition === "morph" && "Morph: the speaker moves smoothly into place."}
+        {s.transition === "fade" && "Fade: a quick dissolve between the two moments."}
+        {s.transition === "cut" && "Jump cut: the picture switches instantly."}
+      </Help>
       {s.transition !== "cut" && <>
         <div className="row"><label htmlFor="len">Blend length</label><span className="val">{s.transition_frames} frames · {ms} ms</span></div>
         <input id="len" type="range" min={2} max={10} step={1} value={s.transition_frames} onChange={(e) => ed.update({ transition_frames: +e.target.value })} />
@@ -151,12 +160,27 @@ export function CutsPanel({ ed }: { ed: Ed }) {
           <span className="mix" style={{ flexBasis: `${s.transition_frames * 9}%` }}>{s.transition === "morph" ? "morph" : "blend"}</span>
           <span className="b">after</span>
         </div>
-        <p className="help">How long the join takes. Short (2–3 frames) is quick and almost invisible, close to a jump cut. Longer (6–10) is softer, but you may notice the blend. 4 is a good start; check one with "Render this cut exactly" in the preview.</p>
+        <Help more={<>Short (2–3 frames) is quick and almost invisible, close to a jump cut. Longer (6–10) is softer, but you may notice the blend. Check one with "Check a cut exactly" under the preview.</>}>
+          How long the join takes. 4 is a good start.
+        </Help>
       </>}
       <p className="muted small">Camera changes are always clean hard cuts, with the crop switching on the exact frame.</p>
+    </div>
+  );
+}
+
+/* ---------- export ---------- */
+
+export function ExportPanel({ ed }: { ed: Ed }) {
+  const s = ed.short;
+  if (!s) return null;
+  return (
+    <div className="panel">
       <div className="row"><label htmlFor="xspeed">Export speed</label><span className="val">{(s.speed ?? 1).toFixed(2)}×</span></div>
       <input id="xspeed" type="range" min={0.75} max={2} step={0.05} value={s.speed ?? 1} onChange={(e) => ed.update({ speed: +e.target.value })} />
-      <p className="help">Speeds up (or slows down) the exported video. The lecturer's voice keeps its normal pitch, so it sounds faster, not higher. To only <i>watch</i> faster, use the speed buttons on the players instead.</p>
+      <Help more={<>To only <i>watch</i> faster, use the speed buttons on the players instead.</>}>
+        Speeds up the exported video; the voice keeps its pitch.
+      </Help>
     </div>
   );
 }
@@ -239,17 +263,14 @@ export function FramingPanel({ ed }: { ed: Ed }) {
         list="zoom-marks" />
       <datalist id="zoom-marks"><option value="1" /></datalist>
       <div className="range-ends small muted"><span>← wider (zoom out)</span><span>closer (zoom in) →</span></div>
-      <p className="help">
-        {s.zoom < 1
-          ? "Zoomed out: more of the scene fits, so the speaker moving left or right is less noticeable. The video no longer fills the phone screen top to bottom; the space above and below is filled with a blurred copy of the picture."
-          : s.zoom > 1
-            ? "Zoomed in: a tighter shot of the speaker. Very high zoom can look soft, because the picture is enlarged."
-            : "1× uses the full height of the video. Slide left to zoom out, right to zoom in."}
-      </p>
-      <label className="check"><input type="checkbox" checked={s.grade} onChange={(e) => ed.update({ grade: e.target.checked })} />Colour grade</label>
-      <p className="help">Gives a punchier look: a little more contrast and colour, slight sharpening, and gently darkened corners. Leave it off to keep the original colours. It only affects the rendered video, not the preview.</p>
+      <Help more={s.zoom < 1 ? "More of the scene fits, so the speaker moving left or right is less noticeable. The space above and below is filled with a blurred copy of the picture."
+          : s.zoom > 1 ? "Very high zoom can look soft, because the picture is enlarged." : undefined}>
+        {s.zoom < 1 ? "Zoomed out: the video no longer fills the screen top to bottom."
+          : s.zoom > 1 ? "Zoomed in: a tighter shot of the speaker."
+          : "1× uses the full height of the video."}
+      </Help>
       <div className="cams-head"><b>Cameras</b>
-        <span className="muted small">The lecturer is recognised in every shot and held in place. Drag a frame to set a camera by hand; it applies to every shot from that camera.</span>
+        <Help more="The lecturer is recognised in every shot and held in place. A frame you set applies to every shot from that camera.">Drag a frame to set a camera by hand.</Help>
       </div>
       {!ed.cameras || ed.cameras.status === "analyzing" ? (
         <p className="muted small">Finding the cameras and the lecturer… (about a minute per hour of lecture)</p>
@@ -386,6 +407,37 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
           }}>Save as my style</button>
         </details>
       )}
+      <label className="check"><input type="checkbox" checked={s.grade} onChange={(e) => ed.update({ grade: e.target.checked })} />Colour grade</label>
+      <Help more="A little more contrast and colour, slight sharpening, and gently darkened corners. Leave it off to keep the original colours.">
+        A punchier look. Shows in the rendered video only.
+      </Help>
     </div>
   );
+}
+
+/* ---------- one-line summaries of each settings section ---------- */
+
+export type Section = "pauses" | "look" | "framing" | "export";
+
+export function summary(ed: Ed, sec: Section): string {
+  const s = ed.short;
+  if (!s) return "";
+  if (sec === "pauses") {
+    const how = s.transition === "morph" ? "Morph" : s.transition === "fade" ? "Fade" : "Jump cut";
+    return `Over ${s.min_gap.toFixed(2)} s · ${how}${s.transition !== "cut" ? `, ${s.transition_frames} frames` : ""}`;
+  }
+  if (sec === "look") {
+    const base = s.style_data ? `${PRESET_LABEL[s.style_data.base ?? "box"] ?? s.style_data.base} (customised)` : PRESET_LABEL[s.style] ?? s.style;
+    const spoken = ed.translationLang === "en" ? "Arabic" : "English";
+    const original = (s.caption_lang ?? "original") === "original";
+    const harakat = { all: "harakat everywhere", quran: "harakat in Quran only", none: "no harakat" }[s.harakat ?? "all"];
+    const caps = !s.captions ? "No captions" : `${base} · ${original ? `${spoken}, ${harakat}` : ed.translationLang === "en" ? "English" : "Arabic"}`;
+    return caps + (s.grade ? " · graded" : "");
+  }
+  if (sec === "framing") {
+    const cams = (ed.cameras?.cameras ?? []).filter((c) => c.count >= 2);
+    const manual = cams.filter((c) => c.manual).length;
+    return `Zoom ${s.zoom.toFixed(2)}× · ${cams.length} camera${cams.length === 1 ? "" : "s"}${manual ? `, ${manual} set by hand` : ""}`;
+  }
+  return (s.speed ?? 1) === 1 ? "Normal speed" : `${(s.speed ?? 1).toFixed(2)}× speed`;
 }

@@ -2,14 +2,34 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, type Range, type Word } from "./api";
 import { Confirm } from "./Confirm";
 import { TopBar, type Ed } from "./Editor";
-import { CaptionsPanel, ClipList, CutsPanel, FramingPanel, Preview, Stats, cropWidth } from "./panels";
+import { CaptionsPanel, ClipStrip, ExportPanel, FramingPanel, PausesPanel, Preview, Stats, cropWidth, summary, type Section } from "./panels";
 import { VolumeControl } from "./Volume";
 import { SpeedPicker, at, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
 import { clamp, fmt, normalize } from "./util";
 
-type Tab = "clips" | "cuts" | "captions" | "framing";
-const TAB_NAME: Record<Tab, string> = { clips: "Clips", cuts: "Cuts", captions: "Captions", framing: "Framing" };
+const SECTIONS: Section[] = ["pauses", "look", "framing", "export"];
+const SECTION_NAME: Record<Section, string> = { pauses: "Pauses", look: "Captions & look", framing: "Framing", export: "Export" };
+const SECTION_KEY = "settings-section";
+
+function storedSection(): Section | null {
+  try {
+    const v = localStorage.getItem(SECTION_KEY);
+    return v === "" ? null : SECTIONS.includes(v as Section) ? (v as Section) : "look";
+  } catch { return "look"; }
+}
+
+/** Preview width that leaves room for the settings under it on short screens. */
+function usePreviewWidth() {
+  const calc = () => Math.round(Math.min(200, Math.max(140, ((window.innerHeight - 520) * 9) / 16)));
+  const [w, setW] = useState(calc);
+  useEffect(() => {
+    const on = () => setW(calc());
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return w;
+}
 
 /**
  * The editor, input to output from left to right: transcript (read, search,
@@ -17,14 +37,19 @@ const TAB_NAME: Record<Tab, string> = { clips: "Clips", cuts: "Cuts", captions: 
  * the transcript and video. One selection, in seconds, is shared by the
  * transcript and the timeline.
  */
-export function Workspace({ ed, notice }: { ed: Ed; notice?: ReactNode }) {
+export function Workspace({ ed }: { ed: Ed }) {
   const video = useRef<HTMLVideoElement>(null);
   const duration = ed.lecture.duration ?? 0;
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [sel, setSel] = useState<Range | null>(null);
   const [view, setView] = useState<Range>([0, Math.min(duration || 120, 120)]);
-  const [tab, setTab] = useState<Tab>("clips");
+  const [open, setOpenState] = useState<Section | null>(storedSection);
+  const setOpen = (v: Section | null) => {
+    setOpenState(v);
+    try { localStorage.setItem(SECTION_KEY, v ?? ""); } catch { /* storage unavailable */ }
+  };
+  const previewWidth = usePreviewWidth();
   const [rate, setRate] = useState(1);
   useEffect(() => { if (video.current) { video.current.playbackRate = rate; video.current.preservesPitch = true; } }, [rate]);
   const stopAt = useRef<number | null>(null);
@@ -153,7 +178,6 @@ export function Workspace({ ed, notice }: { ed: Ed; notice?: ReactNode }) {
   return (
     <div className="app ws">
       <TopBar ed={ed} />
-      {notice}
       <div className="ws-grid">
         <TranscriptPanel ed={ed} time={time} playing={playing} sel={sel} onSelect={select} seek={seek}
           play={() => video.current?.play()} />
@@ -162,9 +186,9 @@ export function Workspace({ ed, notice }: { ed: Ed; notice?: ReactNode }) {
           <div className="player" style={{
             // exactly the video's shape, so the 9:16 frame lines up with the picture
             aspectRatio: `${ed.lecture.width ?? 16} / ${ed.lecture.height ?? 9}`,
-            width: `min(100%, calc((100vh - 400px) * ${(ed.lecture.width ?? 16) / (ed.lecture.height ?? 9)}))`,
+            width: `min(100%, calc((100vh - 460px) * ${(ed.lecture.width ?? 16) / (ed.lecture.height ?? 9)}))`,
           }}>
-            <video ref={video} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline
+            <video ref={video} src={api.videoUrl(ed.lecture.id)} poster={api.thumbUrl(ed.lecture.id)} preload="auto" playsInline
               onPlay={() => setPlaying(true)} onPause={() => { setPlaying(false); setTime(video.current?.currentTime ?? 0); }}
               onSeeked={() => setTime(video.current?.currentTime ?? 0)} onClick={toggle} />
             <div className={`crop-guide ${cam ? "draggable" : ""} ${cam?.manual ? "manual" : ""}`}
@@ -192,57 +216,64 @@ export function Workspace({ ed, notice }: { ed: Ed; notice?: ReactNode }) {
                 : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z" /></svg>}
             </button>
             <span className="tc now-tc">{fmt(time, 2)}</span>
-            <span className="tc dim small">/ {fmt(duration, 2)}</span>
+            <span className="tc dim small">/ {fmt(duration, 0)}</span>
             <button type="button" className="btn small" onClick={() => seek(time - 5)} aria-label="Back 5 seconds">−5s</button>
             <button type="button" className="btn small" onClick={() => seek(time + 5)} aria-label="Forward 5 seconds">+5s</button>
             <SpeedPicker value={rate} onChange={setRate} />
             <VolumeControl getMedia={() => [video.current]} />
             <span className="grow" />
-            <button type="button" className="btn small" onClick={markIn}><kbd>I</kbd> Mark in</button>
-            <button type="button" className="btn small" onClick={markOut}><kbd>O</kbd> Mark out</button>
+            <button type="button" className="btn small" title="Mark in (I): start the selection here" onClick={markIn}><kbd>I</kbd> In</button>
+            <button type="button" className="btn small" title="Mark out (O): end the selection here" onClick={markOut}><kbd>O</kbd> Out</button>
           </div>
         </section>
 
         <section className="tl" aria-label="Timeline">
           <div className="tl-head">
-            <b>Timeline</b>
+            <b title="Drag to select · click to seek · scroll to move · Ctrl+scroll to zoom">Timeline</b>
+            {/* always here, so selecting never moves the layout */}
+            <div className={`sel-slot ${sel ? "on" : ""}`} role="toolbar" aria-label="Selection">
+              <span className="tc sel-time">{sel ? `${fmt(sel[0], 1)} – ${fmt(sel[1], 1)} · ${(sel[1] - sel[0]).toFixed(1)} s` : "Nothing selected"}</span>
+              <button type="button" className="btn small" disabled={!sel} onClick={() => sel && playRange(sel)}>Play</button>
+              <button type="button" className="btn small accent" disabled={!sel} onClick={add}>Add to {s?.name ?? "short"} <kbd>↵</kbd></button>
+              <button type="button" className="btn small" disabled={!sel} onClick={() => { if (sel) { ed.newShort([sel]); setSel(null); } }}>New short</button>
+              <button type="button" className="icon" aria-label="Clear selection" disabled={!sel} onClick={() => setSel(null)}>✕</button>
+            </div>
+            <span className="grow" />
             <span className="legend"><i className="lg-sel" />In {s?.name ?? "the short"}</span>
             <span className="legend"><i className="lg-new" />Selection</span>
             <span className="legend"><i className="lg-pause" />Pause, cut</span>
-            <span className="grow" />
-            <span className="muted small">Drag to select · click to seek · scroll to move · Ctrl+scroll to zoom</span>
             <button type="button" className="btn small sq" aria-label="Zoom out" onClick={() => zoomTo(span * 1.6)}>−</button>
             <button type="button" className="btn small sq" aria-label="Zoom in" onClick={() => zoomTo(span / 1.6)}>+</button>
           </div>
           <Timeline duration={duration} peaks={ed.waveform} speech={ed.speech} minGap={s?.min_gap ?? 0.4}
             ranges={s?.ranges ?? []} selection={sel} time={time} view={view} onView={setView}
             onSeek={seek} onSelect={setSel} />
-          {sel && (
-            <div className="sel-strip" role="toolbar" aria-label="Selection">
-              <span className="tc">{fmt(sel[0], 1)} – {fmt(sel[1], 1)}</span>
-              <span className="dim">{(sel[1] - sel[0]).toFixed(1)} s selected</span>
-              <button type="button" className="btn small" onClick={() => playRange(sel)}>Play</button>
-              <button type="button" className="btn small accent" onClick={add}>Add to {s?.name ?? "short"} <kbd>↵</kbd></button>
-              <button type="button" className="btn small" onClick={() => { ed.newShort([sel]); setSel(null); }}>New short</button>
-              <button type="button" className="icon" aria-label="Clear selection" onClick={() => setSel(null)}>✕</button>
-            </div>
-          )}
+          <ClipStrip ed={ed} onPlay={playRange} />
         </section>
 
         <aside className="side" aria-label="Preview and settings">
-          <Preview ed={ed} t={time} width={216} />
-          <Stats ed={ed} />
-          <div className="tabs" role="tablist" aria-label="Settings sections">
-            {(["clips", "cuts", "captions", "framing"] as Tab[]).map((t) => (
-              <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-                {TAB_NAME[t]}{t === "clips" && s?.ranges.length ? ` · ${s.ranges.length}` : ""}
-              </button>
+          <div className="side-head">
+            <Preview ed={ed} t={time} width={previewWidth} />
+            <Stats ed={ed} />
+          </div>
+          <div className="side-body">
+            {SECTIONS.map((sec) => (
+              <section key={sec} className={`acc ${open === sec ? "open" : ""}`}>
+                <h3>
+                  <button type="button" aria-expanded={open === sec} aria-controls={`acc-${sec}`} onClick={() => setOpen(open === sec ? null : sec)}>
+                    <span className="acc-name">{SECTION_NAME[sec]}</span>
+                    <span className="acc-sum" dir="auto">{summary(ed, sec)}</span>
+                  </button>
+                </h3>
+                <div id={`acc-${sec}`} role="region" aria-label={SECTION_NAME[sec]} hidden={open !== sec}>
+                  {sec === "pauses" && <PausesPanel ed={ed} />}
+                  {sec === "look" && <CaptionsPanel ed={ed} />}
+                  {sec === "framing" && <FramingPanel ed={ed} />}
+                  {sec === "export" && <ExportPanel ed={ed} />}
+                </div>
+              </section>
             ))}
           </div>
-          {tab === "clips" && <ClipList ed={ed} onPlay={playRange} />}
-          {tab === "cuts" && <CutsPanel ed={ed} />}
-          {tab === "captions" && <CaptionsPanel ed={ed} />}
-          {tab === "framing" && <FramingPanel ed={ed} />}
         </aside>
       </div>
     </div>
@@ -428,7 +459,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
           : showDoubt && w.flag === "voted" ? `Changed: two recognisers agreed on this; the first reading was ${(w.alts ?? []).join(" / ")}. Click to check`
           : showDoubt && w.flag === "gemini" ? `Changed by Gemini (${w.why ?? "proofreading"}); was ${(w.alts ?? [])[0] ?? "?"}`
           : undefined;
-        parts.push(<span key={i} data-i={i} className={cls || undefined} title={fixing === i ? undefined : tip}>{w.w}</span>);
+        parts.push(<span key={i} data-i={i} className={(fixing === i ? `${cls} fixing` : cls) || undefined} title={fixing === i ? undefined : tip}>{w.w}</span>);
 
       }
       const whole = sel && segRange(k)[0] >= sel[0] - 0.01 && segRange(k)[1] <= sel[1] + 0.01;
@@ -510,19 +541,26 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
             </label>
             <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx - 1)} aria-label="Previous match">↑</button>
             <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx + 1)} aria-label="Next match">↓</button>
+            <ViewMenu>
+              {ed.translation && <label className="check"><input type="checkbox" checked={showTr} onChange={(e) => setShowTr(e.target.checked)} />Show {LANG_NAME[ed.translationLang]}</label>}
+              {tr.words.some((w) => w.flag) && (
+                <label className="check">
+                  <input type="checkbox" checked={showDoubt} onChange={(e) => setShowDoubt(e.target.checked)} />
+                  Mark <span className="fl-doubt">doubtful</span> words
+                </label>
+              )}
+              {tr.words.some((w) => w.flag) && (
+                <span className="view-key small">
+                  <span className="fl-doubt">Red</span>: likely wrong · <span className="fl-voted">amber</span>: changed by majority · <span className="fl-gemini">blue</span>: changed by Gemini. Hover a word to see what else was heard. Not every mistake is caught.
+                </span>
+              )}
+              <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />Follow playback</label>
+              <span className="view-key small">
+                <b>Click</b> a sentence to select · <b>Shift+click</b> to extend · <b>Double-click</b> to fix text{ed.translation && showTr ? " or translation" : ""}
+              </span>
+            </ViewMenu>
           </div>
-          <TranscriptInfo ed={ed} showTr={showTr} setShowTr={setShowTr} />
-          <div className="howto">
-            <span><b>Click</b> a sentence to select</span><span><b>Shift+click</b> to extend</span>
-            <span><b>Double-click</b> to fix text{ed.translation && showTr ? " or translation" : ""}</span>
-            {tr.words.some((w) => w.flag) && (
-              <label className="follow" title="Words the recognisers disagreed on. Red: likely wrong. Amber: changed by majority. Hover a word to see what else was heard. Not every mistake is caught.">
-                <input type="checkbox" checked={showDoubt} onChange={(e) => setShowDoubt(e.target.checked)} />
-                Mark <span className="fl-doubt">doubtful</span> words
-              </label>
-            )}
-            <label className="follow"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />Follow playback</label>
-          </div>
+          <TranscriptInfo ed={ed} />
           <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""}`} onMouseUp={onMouseUp}>
             {body}
           </article>
@@ -606,7 +644,23 @@ function SourceBadge({ src }: { src: import("./api").Source }) {
 
 const LANG_NAME: Record<string, string> = { en: "English", ar: "Arabic" };
 
-function TranscriptInfo({ ed, showTr, setShowTr }: { ed: Ed; showTr: boolean; setShowTr: (v: boolean) => void }) {
+/** The transcript's display options and how-to, folded into one menu. */
+function ViewMenu({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const away = (e: MouseEvent) => { if (ref.current?.open && !ref.current.contains(e.target as Node)) ref.current.open = false; };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, []);
+  return (
+    <details className="view-menu" ref={ref}>
+      <summary className="btn small">View</summary>
+      <div className="view-pop">{children}</div>
+    </details>
+  );
+}
+
+function TranscriptInfo({ ed }: { ed: Ed }) {
   const tr = ed.transcript!;
   const q = (tr.sources ?? []).filter((s) => s.type === "quran").length;
   const h = (tr.sources ?? []).filter((s) => s.type === "hadith").length;
@@ -619,7 +673,7 @@ function TranscriptInfo({ ed, showTr, setShowTr }: { ed: Ed; showTr: boolean; se
         {(q || h) ? ` · ${q} Quran quotation${q === 1 ? "" : "s"} · ${h} hadith` : ""}
       </span>
       {arabic && tr.engine !== "tashkeel" && !ed.transcribeJob && (
-        <button type="button" className="btn small accent" onClick={() => setUpgrading(true)}>Upgrade to accurate Arabic</button>
+        <button type="button" className="btn small" onClick={() => setUpgrading(true)}>Upgrade to accurate Arabic</button>
       )}
       {upgrading && (
         <Confirm action="Transcribe again" onCancel={() => setUpgrading(false)}
@@ -638,10 +692,7 @@ function TranscriptInfo({ ed, showTr, setShowTr }: { ed: Ed; showTr: boolean; se
         {ed.translateJob ? (
           <span className="small">Translating… {Math.round(ed.translateJob.progress * 100)}%</span>
         ) : ed.translation ? (
-          <>
-            <label className="small"><input type="checkbox" checked={showTr} onChange={(e) => setShowTr(e.target.checked)} />Show {LANG_NAME[ed.translationLang]}</label>
-            <button type="button" className="link small" title="Translate again (e.g. after editing sentences)" onClick={() => ed.translate()}>Re-translate</button>
-          </>
+          <button type="button" className="link small" title="Translate again (e.g. after editing sentences)" onClick={() => ed.translate()}>Re-translate {LANG_NAME[ed.translationLang]}</button>
         ) : (
           <button type="button" className="btn small" disabled={!!ed.transcribeJob}
             title={`Translate every sentence into ${LANG_NAME[ed.translationLang]} on your GPU. Quran verses use the ${ed.translationLang === "en" ? "Saheeh International" : "published"} translation.`}
