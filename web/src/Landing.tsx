@@ -190,7 +190,8 @@ export function Landing() {
                         {shorts[l.id].map((s) => (
                           <a key={s.id} href={`#/l/${l.id}/edit/${s.id}`} className={`slip ${s.rendered ? "done" : ""}`}
                             onClick={(e) => { e.preventDefault(); open(l, s.id); }}>
-                            <i aria-hidden="true" />
+                            {/* rendered: a frame of the short; a draft: the lecture, faded */}
+                            <i aria-hidden="true" style={{ backgroundImage: `url(${s.rendered ? api.shortThumb(l.id, s.id, s.last_render?.at) : api.thumbUrl(l.id)})` }} />
                             <span>{s.name}{s.rendered ? " ✓" : ""}</span>
                           </a>
                         ))}

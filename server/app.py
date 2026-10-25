@@ -5,6 +5,7 @@
 import json
 import os
 import shutil
+import subprocess
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -599,6 +600,19 @@ def short_video(lid: str, sid: str, download: bool = False):
     name = store.get_short(lid, sid)["name"]
     return FileResponse(p, media_type="video/mp4",
                         filename=f"{name}.mp4" if download else None)
+
+
+@app.get("/api/lectures/{lid}/shorts/{sid}/thumb")
+def short_thumb(lid: str, sid: str):
+    """A frame of the rendered short (made once per render, kept next to it)."""
+    p = store.render_path(lid, sid)
+    if not p.exists():
+        raise HTTPException(404, "not rendered yet")
+    jpg = p.with_suffix(".jpg")
+    if not jpg.exists() or jpg.stat().st_mtime < p.stat().st_mtime:
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "1", "-i", str(p), "-frames:v", "1",
+                        "-vf", "scale=180:-2", str(jpg)], check=True)
+    return FileResponse(jpg)
 
 
 # ---------- jobs & styles ----------

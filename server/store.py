@@ -120,6 +120,7 @@ def save_short(short: dict) -> dict:
 def delete_short(lid: str, sid: str) -> None:
     _short_path(lid, sid).unlink(missing_ok=True)
     render_path(lid, sid).unlink(missing_ok=True)
+    render_path(lid, sid).with_suffix(".jpg").unlink(missing_ok=True)
 
 
 def render_path(lid: str, sid: str) -> Path:

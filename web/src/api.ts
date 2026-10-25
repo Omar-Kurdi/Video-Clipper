@@ -223,5 +223,6 @@ export const api = {
   saveStyle: (name: string, data: StyleData) => req<{ ok: boolean }>("/api/styles", json({ name, data })),
   videoUrl: (id: string) => `/api/lectures/${id}/video`,
   thumbUrl: (id: string) => `/api/lectures/${id}/thumb`,
+  shortThumb: (id: string, sid: string, v?: number) => `/api/lectures/${id}/shorts/${sid}/thumb${v ? `?v=${v}` : ""}`,
   shortVideoUrl: (id: string, sid: string, v?: number) => `/api/lectures/${id}/shorts/${sid}/video${v ? `?v=${v}` : ""}`,
 };
