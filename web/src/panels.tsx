@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Camera, type Range, type StyleData, type TextStyle } from "./api";
 import type { Ed } from "./Editor";
 import { QuickPlayer } from "./Quick";
+import { rememberVolume } from "./Volume";
 import { fmt, parseTime, useDebounced } from "./util";
 
 /* ---------- live 9:16 preview / rendered video ---------- */
@@ -44,7 +45,7 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
       {tab === "play" && s?.ranges.length ? <QuickPlayer ed={ed} width={width} /> : (
       <div className="phone-frame" style={{ width, height }}>
         {tab === "rendered" && s?.rendered ? (
-          <video key={ed.renderedVersion} src={api.shortVideoUrl(ed.lecture.id, s.id, ed.renderedVersion)} controls playsInline />
+          <video key={ed.renderedVersion} src={api.shortVideoUrl(ed.lecture.id, s.id, ed.renderedVersion)} ref={rememberVolume} controls playsInline />
         ) : img ? (
           <img src={img} alt="Preview of the short at the current time" className={loading ? "loading" : ""} />
         ) : (

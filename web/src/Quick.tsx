@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Range, type TextStyle, type Transcript, type Translation, type Word } from "./api";
 import type { Ed } from "./Editor";
 import { effectiveCaption } from "./panels";
-import { VolumeControl } from "./Volume";
+import { rememberVolume, VolumeControl } from "./Volume";
 import { clamp, fmt } from "./util";
 
 /**
@@ -334,7 +334,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
         {!playing && <div className="q-play" aria-hidden="true">▶</div>}
         {exact && (
           <div className="q-exact">
-            <video src={exact} autoPlay loop playsInline muted={false} />
+            <video ref={rememberVolume} src={exact} autoPlay loop playsInline />
             <button type="button" className="btn small" onClick={(e) => { e.stopPropagation(); setExact(null); }}>Close exact view</button>
           </div>
         )}

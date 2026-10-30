@@ -52,6 +52,18 @@ function sourceFor(el: HTMLMediaElement): MediaElementAudioSourceNode {
   return src;
 }
 
+/**
+ * For a player with its own (native) controls: starts at the app's volume, and
+ * changes made with its controls become the app's volume. Use as a ref.
+ */
+export function rememberVolume(el: HTMLMediaElement | null) {
+  if (!el || el.dataset.vol) return;
+  el.dataset.vol = "1";
+  el.volume = volume.level ** 2; // same curve as the shared gain node
+  el.muted = volume.muted;
+  el.addEventListener("volumechange", () => setVolume({ level: Math.sqrt(el.volume), muted: el.muted }));
+}
+
 export function VolumeControl({ getMedia }: { getMedia: () => (HTMLMediaElement | null)[] }) {
   const [v, setV] = useState(volume);
   useEffect(() => { listeners.add(setV); return () => { listeners.delete(setV); }; }, []);
