@@ -177,8 +177,10 @@ def _quran_span(toks, pairs: list[tuple[int, int, int, int]]) -> dict:
     ref = f"{SURAH_NAMES[s0 - 1].replace('_', ' ')} {s0}:{a0}" + (f"–{a1}" if (s1, a1) != (s0, a0) else "")
     return {"type": "quran", "w0": pairs[0][0], "w1": pairs[-1][1], "ref": ref, "surah": s0, "ayah": a0,
             "ayah_end": a1, "text": " ".join(t[1] for t in toks[q0:q1 + 1]),
-            # (first word, end word, mushaf text for them: usually one word, two where one was misheard)
-            "map": [[a, b, " ".join(t[1] for t in toks[q:q + nq])] for a, b, q, nq in pairs],
+            # (first word, end word, mushaf text for them: usually one word, two where one was misheard,
+            #  and the ayah they're in, so the on-screen reference can follow ayah by ayah)
+            "map": [[a, b, " ".join(t[1] for t in toks[q:q + nq]),
+                     f"{SURAH_NAMES[toks[q][2] - 1].replace('_', ' ')} {toks[q][2]}:{toks[q][3]}"] for a, b, q, nq in pairs],
             "matched": len(pairs), "url": f"https://quran.com/{s0}/{a0}", "_pairs": pairs}
 
 
@@ -516,10 +518,12 @@ def apply_quran(words: list[dict], spans: list[dict]) -> int:
     for sp in spans:
         if sp["type"] != "quran":
             continue
-        for a, b, tok in sp["map"]:
+        for a, b, tok, ayah in sp["map"]:
+            if sp["ref"].startswith("~"):
+                ayah = sp["ref"]  # which ayah can't be told either
             if sp.get("keep_spoken"):  # a reading the lecturer chose, or text that differs between places
                 for x in words[a:b]:
-                    x["quran"] = sp["ref"]
+                    x["quran"], x["ayah"] = sp["ref"], ayah
                     x.pop("flag", None)
                 continue
             w = words[a]
@@ -537,7 +541,7 @@ def apply_quran(words: list[dict], spans: list[dict]) -> int:
                 w["e"] = words[b - 1]["e"]
                 for x in words[a + 1:b]:
                     x["_drop"] = True
-            w["quran"] = sp["ref"]
+            w["quran"], w["ayah"] = sp["ref"], ayah
             w.pop("flag", None)  # mushaf text: nothing left to doubt (other readings stay in "alts")
     return n
 
@@ -631,7 +635,7 @@ def _drop_words(data: dict, spans: list[dict]) -> None:
         g["w0"], g["w1"] = new_index[g["w0"]], new_index[g["w1"]]
 
 
-SOURCES_VERSION = 6  # bump when matching improves: older transcripts are checked again when opened
+SOURCES_VERSION = 7  # bump when matching improves: older transcripts are checked again when opened
 
 
 def annotate(data: dict) -> dict:
@@ -643,6 +647,7 @@ def annotate(data: dict) -> dict:
             if w.pop("vocab", None):
                 w["flag"] = "doubt"
             w.pop("quran", None)
+            w.pop("ayah", None)
             w.pop("hadith", None)
     words = data["words"]
     alts = [list(w.get("alts", [])) + ([w["asr"]] if w.get("asr") and " " not in w["asr"] else []) for w in words]
@@ -685,5 +690,10 @@ def quran_label(ref: str, lang: str = "ar") -> str:
     if lang != "ar":
         k = int(surah) if surah.isdigit() else 0
         return f"Quran · {SURAH_NAMES_EN[k - 1].replace('_', ' ')} {num}" if 1 <= k <= 114 else f"Quran {num}"
-    many = "–" in ayat
-    return f"سورة {name}، {'الآيات' if many else 'الآية'} {ayat.translate(_AR_DIGITS)}"
+    a, _, b = ayat.partition("–")
+    if not b:
+        return f"سورة {name}، الآية {a.translate(_AR_DIGITS)}"
+    # in words, not with a dash: several Arabic fonts have no dash glyph
+    a, b = a.translate(_AR_DIGITS), b.translate(_AR_DIGITS)
+    joined = f"{a} و{b}" if int(ayat.partition("–")[2]) - int(ayat.partition("–")[0]) == 1 else f"من {a} إلى {b}"
+    return f"سورة {name}، الآيات {joined}"

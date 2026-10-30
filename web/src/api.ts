@@ -93,6 +93,7 @@ export interface Estimate {
 
 export interface Word {
   w: string; s: number; e: number; quran?: string; spoken?: string;
+  ayah?: string;  // the ayah a Quran word is in ("الأعراف 7:134"), for the on-screen reference
   /** recognisers disagreed: "doubt" = no other model heard this word; "voted" = replaced by what two others heard */
   flag?: "doubt" | "voted" | "gemini";  // "gemini": changed by Gemini proofreading (reason in why)
   alts?: string[];  // what the other recognisers heard (or, for "voted"/"gemini", the original reading)

@@ -63,6 +63,15 @@ d = annotate(transcript("وفي قراءة يعقوب قال ربنا وَالر
 check("qira'at: lecturer's harakat kept", d["words"][5]["w"] == "وَالرِّجْزَ" and d["words"][5].get("quran"),
       d["words"][5])
 
+# each word knows its ayah, so the on-screen reference follows the recitation (74:4 then 74:5)
+d = annotate(transcript("قال ربنا سبحانه وثيابك فطهر والرجز فاهجر اي عبادة الاوثان"))
+ay = [w.get("ayah") for w in d["words"][3:7]]
+check("ayah per word across two ayahs", ay == ["المدثر 74:4"] * 2 + ["المدثر 74:5"] * 2, ay)
+from shorts.sources import quran_label  # noqa: E402
+check("ayah range written in words (no dash glyph needed)",
+      quran_label("الأعراف 7:134–135") == "سورة الأعراف، الآيات ١٣٤ و١٣٥"
+      and quran_label("البقرة 2:1–5") == "سورة البقرة، الآيات من ١ إلى ٥", quran_label("الأعراف 7:134–135"))
+
 # ---------- hadith ----------
 
 # «قال صلى الله عليه وسلم» is a cue; a short hadith; the collection's wording fixes a word another model heard

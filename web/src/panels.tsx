@@ -356,8 +356,8 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
           </option>
         </select>
       </label>
-      <label className="check" title="While a recognised Quran verse is quoted, a small line above the captions names the surah and ayah, so viewers know it's Quran">
-        <input type="checkbox" checked={s.quran_tag ?? true} onChange={(e) => ed.update({ quran_tag: e.target.checked })} />
+      <label className="check" title={s.captions ? "While a recognised Quran verse is quoted, a small line above the captions names the surah and the ayah being recited" : "Shown above the captions, so it needs Burn in captions"}>
+        <input type="checkbox" disabled={!s.captions} checked={s.captions && (s.quran_tag ?? true)} onChange={(e) => ed.update({ quran_tag: e.target.checked })} />
         Show surah and ayah when a verse is quoted
       </label>
       {(s.caption_lang ?? "original") === "original" && <label className="field">Harakat (tashkeel) in captions

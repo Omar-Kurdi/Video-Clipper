@@ -578,6 +578,8 @@ def render_short(lid: str, sid: str):
     out = store.render_path(lid, sid)
 
     def run(report):
+        if words_path(store.source_path(lid)).exists():
+            media.transcript(lid)  # brings the Quran/hadith marks up to date before they're burned in
         report(stage="finding the lecturer")
         opts.identity = media.cameras(lid)
         tmp = out.with_suffix(".part.mp4")

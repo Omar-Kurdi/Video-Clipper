@@ -98,8 +98,11 @@ function quranLabel(ref: string, lang: string): string {
     const en = SURAH_EN[+surah - 1];
     return en ? `Quran · ${en.replace("_", " ")} ${num}` : `Quran ${num}`;
   }
-  const digits = ayat.replace(/[0-9]/g, (d) => AR_DIGITS[+d]);
-  return `سورة ${name}، ${ayat.includes("–") ? "الآيات" : "الآية"} ${digits}`;
+  const ar = (n: string) => n.replace(/[0-9]/g, (d) => AR_DIGITS[+d]);
+  const [a, b] = ayat.split("–");
+  if (!b) return `سورة ${name}، الآية ${ar(a)}`;
+  // in words, not with a dash (as in the render: some Arabic fonts have no dash)
+  return `سورة ${name}، الآيات ${+b - +a === 1 ? `${ar(a)} و${ar(b)}` : `من ${ar(a)} إلى ${ar(b)}`}`;
 }
 
 function textCss(ts: TextStyle, k: number): React.CSSProperties {
@@ -290,11 +293,17 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   const chunk = chunkIdx >= 0 ? capChunks[chunkIdx] : null;
   const k = width / 1080;
   // surah/ayah tag while a Quran verse is quoted (as in the render)
-  const qSpan = s.quran_tag === false || !ed.transcript ? null : (ed.transcript.sources ?? []).find((sp) => {
+  // (only with captions, as in the render; one ayah at a time, following the recitation)
+  const qSpan = s.quran_tag === false || !s.captions || !ed.transcript ? null : (ed.transcript.sources ?? []).find((sp) => {
     if (sp.type !== "quran" || !sp.ref) return false;
     const ws = ed.transcript!.words;
     return ws[sp.w0].s - 0.25 <= srcT && srcT < ws[sp.w1 - 1].e + 0.25;
   }) ?? null;
+  const qRef = qSpan && (() => {
+    const ws = ed.transcript!.words.slice(qSpan.w0, qSpan.w1);
+    const w = [...ws].reverse().find((x) => x.s <= srcT) ?? ws[0];
+    return w.ayah ?? w.quran ?? qSpan.ref!;
+  })();
   const tagLang = (s.caption_lang ?? "original") === "original" ? "ar" : s.caption_lang!;
 
   const note = `Instant preview: ${s.transition === "morph" ? "morphs show as fades here" : s.transition === "fade" ? "fades as rendered" : "jump cuts as rendered"}; framing is approximate.`;
@@ -319,7 +328,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
             top: `calc(${capStyle.y * 100}% - ${(capStyle.size * 0.95 + capStyle.pad_y + 30) * k}px)`,
             fontFamily: `"${capStyle.font.split(":")[0]}", "Noto Sans Arabic", sans-serif`,
             fontSize: Math.max(26, capStyle.size * 0.5) * k,
-          }}>{quranLabel(qSpan.ref!, tagLang)}</div>
+          }}>{quranLabel(qRef!, tagLang)}</div>
         )}
         {s.title && titleStyle && <div className="q-cap" dir="auto" style={textCss(titleStyle, k)}>{s.title}</div>}
         {!playing && <div className="q-play" aria-hidden="true">▶</div>}

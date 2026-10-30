@@ -418,13 +418,14 @@ def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom:
         t = max(t, cur[0][1] + 0.2)
         chunks = [cur]
     tags = []
-    if quran_tag and words_path(src).exists():
+    if quran_tag and captions and words_path(src).exists():  # the tag belongs with the captions
         from shorts.sources import quran_label
 
         qw = [w for w in load_words(src) if w.get("quran") and w["s"] - 1 <= t <= w["e"] + 1]
         if qw:
             lang = "ar" if caption_lang in ("original", "ar") else caption_lang
-            tags = [(t - 1, t + 1, quran_label(qw[0]["quran"], lang))]
+            w = min(qw, key=lambda w: 0 if w["s"] <= t <= w["e"] else min(abs(w["s"] - t), abs(w["e"] - t)))
+            tags = [(t - 1, t + 1, quran_label(w.get("ayah") or w["quran"], lang))]
     ov = Overlay(chunks, replace(style, captions=replace(style.captions, fade_ms=0)), title, tags)
     ov.apply(img, t)
     ok, jpg = cv2.imencode(".jpg", cv2.resize(img, (540, 960), interpolation=cv2.INTER_AREA),

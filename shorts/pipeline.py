@@ -84,15 +84,16 @@ def translated_words(video: Path, lang: str) -> list[dict]:
 
 
 def quran_tags(words: list[dict], segs, fps, d: int, lang: str = "ar") -> list[tuple[float, float, str]]:
-    """(start, end, label) in output time for every quoted Quran passage in the short."""
+    """(start, end, label) in output time for every quoted ayah in the short."""
     from .sources import quran_label
 
     tags: list[tuple[float, float, str]] = []
     i = 0
     while i < len(words):
-        ref = words[i].get("quran")
+        # one tag per ayah, following the recitation
+        ref = words[i].get("ayah") or words[i].get("quran")
         j = i
-        while j < len(words) and words[j].get("quran") == ref:
+        while j < len(words) and (words[j].get("ayah") or words[j].get("quran")) == ref:
             j += 1
         if ref:
             m = map_words(words[i:j], segs, fps, d)
@@ -184,7 +185,7 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
 
         overlay = None
         tags = quran_tags(plan_words, segs, fps, d, "ar" if o.caption_lang in ("original", "ar") else o.caption_lang) \
-            if o.quran_tag else []
+            if o.quran_tag and o.captions else []  # the tag belongs with the captions
         if o.captions or o.title or tags:
             style = resolve_style(o)
             chunks = chunk(map_words(caption_words(words, o.harakat), segs, fps, d), style.captions) if o.captions else []
