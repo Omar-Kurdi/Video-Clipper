@@ -41,12 +41,15 @@ def _range_audio(video: Path, start: float, dur: float) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.float32)
 
 
-def _snap_to_words(start: float, end: float, words: list[dict]) -> tuple[float, float]:
-    """Move range edges outward so they don't split a word."""
+def _snap_to_words(start: float, end: float, words: list[dict],
+                   limit: float = 0.25) -> tuple[float, float]:
+    """Move range edges outward so they don't split a word, by at most `limit`:
+    Whisper often stretches a word across a pause, and following it would keep
+    seconds past where the user put the edge."""
     for w in words:
-        if w["s"] < start < w["e"]:
+        if w["s"] < start < w["e"] and start - w["s"] <= limit:
             start = w["s"]
-        if w["s"] < end < w["e"]:
+        if w["s"] < end < w["e"] and w["e"] - end <= limit:
             end = w["e"]
     return start, end
 
