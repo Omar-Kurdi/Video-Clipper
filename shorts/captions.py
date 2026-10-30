@@ -8,6 +8,7 @@ a style: a preset name (see PRESETS) or a JSON file such as
      "title": {"color": "#FFFFFF"}}
 """
 import json
+import re
 import subprocess
 from dataclasses import dataclass, fields, replace
 from fractions import Fraction
@@ -170,11 +171,15 @@ def _latin(pattern: str) -> str:
     return pattern + ":charset=41-5a 61-7a"
 
 
+HARAKAT = re.compile("[\u064B-\u0652\u0670]")
+
+
 @lru_cache(maxsize=None)
-def _ink_extent(pattern: str, size: int, rtl: bool) -> tuple[int, int]:
+def _ink_extent(pattern: str, size: int, rtl: bool, marks: bool = False) -> tuple[int, int]:
     """Top/bottom of the inked pixels of typical text drawn at y=0 (tall
-    letters and descenders, no stacked marks)."""
-    ref = "الجيب كلمة" if rtl else "Hgjy"
+    letters and descenders; with marks: harakat, shadda stacked with fatha
+    above and with kasra below)."""
+    ref = ("إِنِّي لَّهُ كُلِّ الْجَيْبُ" if marks else "الجيب كلمة") if rtl else "Hgjy"
     font = _font(pattern, size)
     img = Image.new("L", (size * 12, size * 4), 0)
     ImageDraw.Draw(img).text((size, size), ref, font=font, fill=255,
@@ -200,23 +205,14 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
             break
         size = int(size * 0.92)
     # size the box from real glyph ink of a fixed reference string, so text is
-    # optically centred and every caption box has the same height
-    top, bottom = _ink_extent(pattern, size, rtl)
+    # optically centred and caption boxes share one height (a taller one with
+    # harakat, so the marks stay inside the box)
+    top, bottom = _ink_extent(pattern, size, rtl, bool(rtl and HARAKAT.search("".join(words))))
     margin = ts.shadow * 2 + ts.outline
     W = int(text_w + 2 * ts.pad_x + 2 * margin)
-    H = int(bottom - top + 2 * ts.pad_y + 2 * margin)
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-
-    if ts.box:
-        box = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        ImageDraw.Draw(box).rounded_rectangle(
-            (margin, margin, W - margin - 1, H - margin - 1),
-            radius=min(ts.radius, (H - 2 * margin) // 2), fill=_rgba(ts.box_color, ts.box_opacity))
-        img = Image.alpha_composite(img, box)
 
     # word positions, in reading order
     x = W - margin - ts.pad_x if rtl else margin + ts.pad_x
-    y = margin + ts.pad_y - top
     placed = []
     for w, wd in zip(words, widths):
         if rtl:
@@ -227,16 +223,23 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
             placed.append((x, w))
             x += wd + space
 
-    # centre this caption's own ink in the (fixed-height) box
-    probe = Image.new("L", (W, H + 4 * size), 0)
+    # this caption's own ink (drawn at y=0): the box is never shorter than it
+    probe = Image.new("L", (W, 6 * size), 0)
     pd = ImageDraw.Draw(probe)
     for px, w in placed:
-        pd.text((px, y + 2 * size), w, font=font, fill=255, direction=direction,
-                stroke_width=ts.outline)
+        pd.text((px, 2 * size), w, font=font, fill=255, direction=direction, stroke_width=ts.outline)
     rows = np.where(np.asarray(probe).max(axis=1) > 0)[0]
-    if len(rows):
-        ink_mid = (rows[0] + rows[-1] + 1) / 2 - 2 * size
-        y += round(H / 2 - ink_mid)
+    ink_top, ink_bottom = (int(rows[0]) - 2 * size, int(rows[-1]) - 2 * size + 1) if len(rows) else (top, bottom)
+    H = int(max(bottom - top, ink_bottom - ink_top) + 2 * ts.pad_y + 2 * margin)
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    if ts.box:
+        box = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(box).rounded_rectangle(
+            (margin, margin, W - margin - 1, H - margin - 1),
+            radius=min(ts.radius, (H - 2 * margin) // 2), fill=_rgba(ts.box_color, ts.box_opacity))
+        img = Image.alpha_composite(img, box)
+    # centre this caption's ink in the box
+    y = round(H / 2 - (ink_top + ink_bottom) / 2)
 
     if ts.shadow:
         sh = Image.new("RGBA", (W, H), (0, 0, 0, 0))
