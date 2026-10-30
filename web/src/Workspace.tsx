@@ -87,12 +87,23 @@ export function Workspace({ ed }: { ed: Ed }) {
   // keep the playhead in view when it moves, without fighting manual scrolling
   useEffect(() => { show(time, time); }, [time, show]);
 
+  // One seek at a time: while the video is still decoding a frame, only the
+  // latest target waits (scrubbing would otherwise queue up a backlog of seeks).
+  const pendingSeek = useRef<number | null>(null);
   const seek = useCallback((t: number) => {
     const v = video.current;
     if (!v) return;
-    v.currentTime = clamp(t, 0, duration);
-    setTime(v.currentTime);
+    t = clamp(t, 0, duration);
+    setTime(t);
+    if (v.seeking) { pendingSeek.current = t; return; }
+    v.currentTime = t;
   }, [duration]);
+  const onSeeked = () => {
+    const v = video.current;
+    if (!v) return;
+    if (pendingSeek.current != null) { v.currentTime = pendingSeek.current; pendingSeek.current = null; }
+    else setTime(v.currentTime);
+  };
   const toggle = () => {
     const v = video.current;
     if (!v) return;
@@ -190,7 +201,7 @@ export function Workspace({ ed }: { ed: Ed }) {
           }}>
             <video ref={video} src={api.videoUrl(ed.lecture.id)} poster={api.thumbUrl(ed.lecture.id)} preload="auto" playsInline
               onPlay={() => setPlaying(true)} onPause={() => { setPlaying(false); setTime(video.current?.currentTime ?? 0); }}
-              onSeeked={() => setTime(video.current?.currentTime ?? 0)} onClick={toggle} />
+              onSeeked={onSeeked} onClick={toggle} />
             <div className={`crop-guide ${cam ? "draggable" : ""} ${cam?.manual ? "manual" : ""}`}
               style={{ width: `${cw * 100}%`, left: `${guideLeft}%` }}
               onPointerDown={(e) => {
@@ -229,7 +240,7 @@ export function Workspace({ ed }: { ed: Ed }) {
 
         <section className="tl" aria-label="Timeline">
           <div className="tl-head">
-            <b title="Drag to select · click to seek · scroll to move · Ctrl+scroll to zoom">Timeline</b>
+            <b title="Drag to select · click to seek · drag along the times at the top to scrub · scroll to move · Ctrl+scroll to zoom">Timeline</b>
             {/* always here, so selecting never moves the layout */}
             <div className={`sel-slot ${sel ? "on" : ""}`} role="toolbar" aria-label="Selection">
               <span className="tc sel-time">{sel ? `${fmt(sel[0], 1)} – ${fmt(sel[1], 1)} · ${(sel[1] - sel[0]).toFixed(1)} s` : "Nothing selected"}</span>

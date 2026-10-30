@@ -20,7 +20,7 @@ interface Props {
 const C = {
   bg: "#141D19", wave: "#55625B", waveSel: "#EF5A43", pause: "#0F1613", range: "rgba(239,90,67,0.12)",
   rangeEdge: "#EF5A43", hatch: "rgba(227,232,228,0.16)", selEdge: "#E3E8E4", head: "#FFFFFF", tick: "#93A09A",
-  overBg: "#0F1613", overWave: "#2F3B36", overBox: "#C2CBC6",
+  rulerBg: "#1A2420", overBg: "#0F1613", overWave: "#2F3B36", overBox: "#C2CBC6",
 };
 
 /** Pencil hatching for the pending selection. */
@@ -89,6 +89,8 @@ export function Timeline(p: Props) {
 
     // ruler
     const step = tickStep(v1 - v0, W);
+    ctx.fillStyle = C.rulerBg;
+    ctx.fillRect(0, 0, W, 17);
     ctx.fillStyle = C.tick;
     ctx.font = "10px 'Spline Sans Mono', monospace";
     for (let t = Math.ceil(v0 / step) * step; t < v1; t += step) {
@@ -181,11 +183,21 @@ export function Timeline(p: Props) {
   // ----- interaction -----
   const localX = (e: { clientX: number; currentTarget: Element }) =>
     e.clientX - e.currentTarget.getBoundingClientRect().left;
-  const drag = useRef<{ kind: "new" | "start" | "end"; anchor: number; x0: number; moved: boolean } | null>(null);
+  // the ruler (the times along the top) scrubs: press and move to show that moment, nothing is selected
+  const RULER = 18;
+  const inRuler = (e: { clientY: number; currentTarget: Element }) =>
+    e.clientY - e.currentTarget.getBoundingClientRect().top < RULER;
+  const drag = useRef<{ kind: "new" | "start" | "end" | "scrub"; anchor: number; x0: number; moved: boolean } | null>(null);
 
   const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const x = localX(e);
     const t = tOf(x);
+    if (inRuler(e)) {
+      drag.current = { kind: "scrub", anchor: t, x0: x, moved: false };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+      p.onSeek(clamp(t, 0, p.duration));
+      return;
+    }
     let kind: "new" | "start" | "end" = "new";
     if (p.selection) {
       if (Math.abs(x - xOf(p.selection[0])) < 7) kind = "start";
@@ -199,9 +211,10 @@ export function Timeline(p: Props) {
     const x = localX(e);
     if (!d) {
       const near = p.selection && (Math.abs(x - xOf(p.selection[0])) < 7 || Math.abs(x - xOf(p.selection[1])) < 7);
-      e.currentTarget.style.cursor = near ? "ew-resize" : "crosshair";
+      e.currentTarget.style.cursor = inRuler(e) ? "col-resize" : near ? "ew-resize" : "crosshair";
       return;
     }
+    if (d.kind === "scrub") { p.onSeek(clamp(tOf(x), 0, p.duration)); return; }
     if (Math.abs(x - d.x0) > 3) d.moved = true;
     if (!d.moved) return;
     const t = clamp(tOf(x), 0, p.duration);
@@ -210,7 +223,7 @@ export function Timeline(p: Props) {
   const onUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const d = drag.current;
     drag.current = null;
-    if (!d) return;
+    if (!d || d.kind === "scrub") return;
     const x = localX(e);
     if (Math.abs(x - d.x0) > 3) d.moved = true;
     const t = clamp(tOf(x), 0, p.duration);
@@ -278,7 +291,7 @@ export function Timeline(p: Props) {
     <div ref={wrap} className="timeline">
       <canvas ref={over} className="overview" aria-label="Whole lecture overview"
         onPointerDown={overDown} onPointerMove={overMove} onPointerUp={overUp} />
-      <canvas ref={main} className="wave" aria-label="Timeline: drag to select, click to seek, Ctrl+scroll to zoom"
+      <canvas ref={main} className="wave" aria-label="Timeline: drag to select, click to seek, drag along the times at the top to scrub, Ctrl+scroll to zoom"
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />
     </div>
   );
