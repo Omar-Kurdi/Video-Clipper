@@ -461,7 +461,7 @@ details summary { cursor: pointer; font-weight: 500; }
 .src-en { color: var(--muted); }
 /* recogniser disagreement (see Word.flag) */
 .fl-doubt { text-decoration: underline wavy var(--red); text-decoration-thickness: 1.5px; text-underline-offset: 7px; }
-.fl-voted { text-decoration: underline dotted var(--ochre); text-decoration-thickness: 2px; text-underline-offset: 7px; }
+.fl-voted { text-decoration: underline wavy var(--ochre); text-decoration-thickness: 1.5px; text-underline-offset: 7px; }
 
 /* settling a doubtful word: the other readings, one click each */
 .word-fix { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 4px; padding: 10px 12px; border: 1px solid var(--line-2);
@@ -475,7 +475,7 @@ details summary { cursor: pointer; font-weight: 500; }
 .transcript span.fl-doubt, .transcript span.fl-voted, .transcript span.fl-gemini { cursor: help; }
 /* the word the fix box under the sentence is about */
 .transcript span.fixing { outline: 2px solid var(--focus); outline-offset: 3px; }
-.fl-gemini { text-decoration: underline solid var(--lapis); text-decoration-thickness: 2px; text-underline-offset: 7px; }
+.fl-gemini { text-decoration: underline wavy var(--lapis); text-decoration-thickness: 1.5px; text-underline-offset: 7px; }
 .err-text { color: var(--err); }
 .confirm-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; }
 .confirm-check code { font-family: var(--f-mono, monospace); font-size: 11px; word-break: break-all; opacity: 0.8; }
