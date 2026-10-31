@@ -1,0 +1,4 @@
+# Extra packages for an NVIDIA GPU (install.sh adds them when it finds one).
+# torch from PyPI already comes with CUDA; Whisper (CTranslate2) needs these:
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*

@@ -13,9 +13,16 @@ also get Quran and hadith quotations recognised and corrected.
 
 ![The editor on an Arabic lecture, with the TikTok safe area shown on the preview](docs/screenshots/editor-ar.png)
 
-Needs `ffmpeg` (NVENC is used when available), an NVIDIA GPU for
-transcription and translation, Pillow built with raqm, Node 18+
-for the web app, and `pip install -r requirements.txt`.
+Needs `ffmpeg` (NVENC is used when available), Pillow built with raqm and
+Node 18+ for the web app. `./install.sh` installs the Python packages: with
+an NVIDIA GPU it adds `requirements-gpu.txt`; without one it installs the
+CPU build of PyTorch instead.
+
+Without a GPU everything still works, only slower: Whisper transcribes on
+the CPU (about a third of the video's length on a 16-thread CPU, so an hour
+takes ~20 minutes; fewer cores take longer) and translation is much slower than on a GPU. Arabic is transcribed by
+Whisper alone, without the Cohere re-read and the doubtful-word marks, which
+need the GPU.
 
 Models download on first use: about 11 GB for transcription (Whisper 2.9 GB,
 the two Cohere models 3.9 GB each, NVIDIA's checker 0.4 GB) and about 8 GB

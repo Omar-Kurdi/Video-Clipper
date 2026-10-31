@@ -17,7 +17,15 @@ fi
 
 echo "==> Installing Python packages"
 .venv/bin/python -m pip install --quiet --upgrade pip
-.venv/bin/python -m pip install --quiet -r requirements.txt
+if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
+  echo "    NVIDIA GPU found: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1), installing the GPU packages"
+  .venv/bin/python -m pip install --quiet -r requirements.txt -r requirements-gpu.txt
+else
+  echo "    No NVIDIA GPU found: installing the CPU packages (transcription is slower; Arabic uses Whisper only)"
+  # PyPI's torch bundles ~3 GB of CUDA libraries; the CPU build skips them
+  .venv/bin/python -m pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+  .venv/bin/python -m pip install --quiet -r requirements.txt
+fi
 
 echo "==> Building the web app"
 (cd web && npm install --no-audit --no-fund --silent && npm run build --silent)

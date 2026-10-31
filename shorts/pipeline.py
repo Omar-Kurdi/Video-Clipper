@@ -41,7 +41,7 @@ class ShortOptions:
     captions: bool = True
     language: str | None = "ar"
     model: str = "large-v3"
-    device: str = "cuda"
+    device: str | None = None        # None: the GPU when there is one, else the CPU
     identity: dict | None = None     # camera analysis (cameras.json): lecturer + per-camera framing
     extra: dict = field(default_factory=dict)
 

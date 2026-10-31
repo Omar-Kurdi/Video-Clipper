@@ -38,7 +38,7 @@ def main() -> None:
         sp.add_argument("video", type=Path)
         sp.add_argument("--model", default="large-v3")
         sp.add_argument("--lang", default="ar", help="language code, '' to auto-detect")
-        sp.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+        sp.add_argument("--device", default=None, choices=["cuda", "cpu"])
 
     t = sub.add_parser("transcribe", help="transcribe once, writes .words.json + .transcript.txt")
     common(t)

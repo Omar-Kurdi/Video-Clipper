@@ -60,7 +60,8 @@ def _load():
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(MODEL, padding_side="left")
-    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="cuda").eval()
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16,
+                                                 device_map="cuda" if torch.cuda.is_available() else "cpu").eval()
     return tok, model
 
 

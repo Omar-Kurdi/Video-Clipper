@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
-from .util import fmt_time
+from .util import default_device, fmt_time
 
 
 @lru_cache(maxsize=1)
@@ -82,13 +82,14 @@ ENGINES = ("tashkeel", "whisper")
 
 
 def transcribe(video: Path, model: str = "large-v3", language: str | None = "ar",
-               device: str = "cuda", on_progress: Callable[[float], None] | None = None,
+               device: str | None = None, on_progress: Callable[[float], None] | None = None,
                engine: str = "tashkeel", title: str | None = None) -> Path:
     """engine "tashkeel" (Arabic): Whisper for timing, then Cohere-Speech-Tashkeel
     re-reads every sentence for accurate, diacritised text. "whisper": Whisper only.
     Quran quotations are then replaced by the exact mushaf text and hadith are
     linked to their source. `title` (the lecture's) helps pick between similar
     words: see sources.apply_vocab."""
+    device = device or default_device()
     tashkeel = engine == "tashkeel" and (language or "ar") == "ar" and device == "cuda"
     share = 0.55 if tashkeel else 0.95
     m = _model(model, device)
@@ -137,14 +138,14 @@ def transcribe(video: Path, model: str = "large-v3", language: str | None = "ar"
 
 
 def transcribe_ranges(video: Path, ranges: list[tuple[float, float]], model: str = "large-v3",
-                      language: str | None = "ar", device: str = "cuda",
+                      language: str | None = "ar", device: str | None = None,
                       margin: float = 1.0) -> list[dict]:
     """Transcribe only the selected ranges (no full-lecture transcript needed)."""
     import subprocess
 
     import numpy as np
 
-    m = _model(model, device)
+    m = _model(model, device or default_device())
     words = []
     for a, b in ranges:
         start = max(0.0, a - margin)

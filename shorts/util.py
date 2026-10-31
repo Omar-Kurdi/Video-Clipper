@@ -56,6 +56,17 @@ def run(cmd: list[str], **kw) -> None:
 
 
 @lru_cache(maxsize=1)
+def default_device() -> str:
+    """"cuda" when an NVIDIA GPU can run the speech models, else "cpu" (slower)."""
+    try:
+        import ctranslate2
+
+        return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+    except Exception:
+        return "cpu"
+
+
+@lru_cache(maxsize=1)
 def gpu_encoder() -> bool:
     """True when ffmpeg can encode H.264 on the NVIDIA GPU (NVENC)."""
     try:
