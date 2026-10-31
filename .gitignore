@@ -23,3 +23,5 @@ web/dist/
 # secrets (API keys)
 .env
 .env.local
+# private notes, not for GitHub
+FUTURE_IDEAS.md
