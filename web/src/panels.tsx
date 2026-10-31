@@ -234,8 +234,8 @@ function CameraCard({ ed, cam, index }: { ed: Ed; cam: Camera; index: number }) 
       </div>
       <div className="cam-meta">
         <b>Camera {index + 1}</b>
-        <span className="muted small">{cam.share >= 0.01 ? `${Math.round(cam.share * 100)}%` : "<1%"} of the lecture · {cam.has_speaker ? "lecturer found" : "lecturer not recognised"}</span>
-        <span className="small">{cam.manual ? "Your framing (follows this angle even when the camera moves)" : cam.has_speaker ? "Auto: locked on the lecturer" : "Auto: centred. Drag the frame to place it"}</span>
+        <span className="muted small">{cam.share >= 0.01 ? `${Math.round(cam.share * 100)}%` : "<1%"} of the video · {cam.has_speaker ? "speaker found" : "speaker not recognised"}</span>
+        <span className="small">{cam.manual ? "Your framing (follows this angle even when the camera moves)" : cam.has_speaker ? "Auto: locked on the speaker" : "Auto: centred. Drag the frame to place it"}</span>
         {cam.manual && <button type="button" className="link small" onClick={() => ed.setFraming(cam.id, null)}>Reset position to auto</button>}
         <div className="row cam-zoom">
           <label htmlFor={`camzoom${cam.id}`}>Zoom for this camera</label>
@@ -251,12 +251,19 @@ function CameraCard({ ed, cam, index }: { ed: Ed; cam: Camera; index: number }) 
   );
 }
 
+/** Cameras by how much of the video they cover; one-off shots come last. */
+export function sortedCameras(ed: Ed): Camera[] {
+  return [...(ed.cameras?.cameras ?? [])].sort((a, b) => b.count - a.count);
+}
+
 export function FramingPanel({ ed }: { ed: Ed }) {
+  const [showAll, setShowAll] = useState(false);
   const s = ed.short;
   if (!s) return null;
-  // every angle seen at least twice; one-off shots (usually audience close-ups) are summarised
-  const cams = (ed.cameras?.cameras ?? []).filter((c) => c.count >= 2).sort((a, b) => b.count - a.count);
-  const minor = (ed.cameras?.cameras.length ?? 0) - cams.length;
+  // every angle seen at least twice; one-off shots (often cutaways) are listed on request
+  const all = sortedCameras(ed);
+  const minor = all.filter((c) => c.count < 2).length;
+  const cams = showAll ? all : all.filter((c) => c.count >= 2);
   return (
     <div className="panel">
       <div className="row"><label htmlFor="zoom">Zoom (all cameras)</label><span className="val">{s.zoom < 1 ? "wider " : s.zoom > 1 ? "closer " : ""}{s.zoom.toFixed(2)}×</span></div>
@@ -271,16 +278,23 @@ export function FramingPanel({ ed }: { ed: Ed }) {
           : "1× uses the full height of the video."}
       </Help>
       <div className="cams-head"><b>Cameras</b>
-        <Help more="The lecturer is recognised in every shot and held in place. A frame you set applies to every shot from that camera.">Drag a frame to set a camera by hand.</Help>
+        <Help more="The main speaker is recognised in every shot and held in place. A frame you set applies to every shot from that camera.">Drag a frame to set a camera by hand.</Help>
       </div>
       {!ed.cameras || ed.cameras.status === "analyzing" ? (
-        <p className="muted small">Finding the cameras and the lecturer… (about a minute per hour of lecture)</p>
+        <p className="muted small">Finding the cameras and the speaker… (about a minute per hour of video)</p>
       ) : (
         <ul className="cam-list">
           {cams.map((c, i) => <CameraCard key={c.id} ed={ed} cam={c} index={i} />)}
         </ul>
       )}
-      {minor > 0 && <p className="muted small">{minor} one-off shots (seen once, usually audience close-ups) are framed automatically. To adjust one, pause on it and drag the frame on the video.</p>}
+      {minor > 0 && (
+        <p className="muted small">
+          {showAll ? `${minor} one-off shots (seen only briefly) are listed last.` : `${minor} one-off shots (seen only briefly) are framed automatically.`}{" "}
+          <button type="button" className="link small" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
+            {showAll ? "Hide them" : "Show them"}
+          </button>
+        </p>
+      )}
     </div>
   );
 }

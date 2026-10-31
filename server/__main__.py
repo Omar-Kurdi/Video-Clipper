@@ -18,5 +18,5 @@ wanted = int(os.environ.get("PORT", 8000))
 port = wanted if "PORT" in os.environ else _free_port(host, wanted)
 if port != wanted:
     print(f"port {wanted} is busy, using {port}")
-print(f"Lecture Shorts: http://{host}:{port}")
+print(f"Video Clipper: http://{host}:{port}")
 uvicorn.run("server.app:app", host=host, port=port)

@@ -284,7 +284,7 @@ export function TopBar({ ed }: { ed: Ed }) {
   return (
     <>
       <header className="topbar">
-        <a href="#/" className="brand" title="Back to the library"><Mark size={20} /> Lecture Shorts</a>
+        <a href="#/" className="brand" title="Back to the library"><Mark size={20} /> Video Clipper</a>
         <span className="crumb-sep" aria-hidden="true">/</span>
         <span className="crumb" dir="auto">{lecture.title}</span>
         <nav className="short-tabs" aria-label="Shorts">

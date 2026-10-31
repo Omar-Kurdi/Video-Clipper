@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, type Range, type Word } from "./api";
 import { Confirm } from "./Confirm";
 import { TopBar, type Ed } from "./Editor";
-import { CaptionsPanel, ClipStrip, ExportPanel, FramingPanel, PausesPanel, Preview, Stats, cropWidth, summary, type Section } from "./panels";
+import { CaptionsPanel, ClipStrip, ExportPanel, FramingPanel, PausesPanel, Preview, Stats, cropWidth, sortedCameras, summary, type Section } from "./panels";
 import { VolumeControl } from "./Volume";
 import { SpeedPicker, at, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
@@ -167,11 +167,10 @@ export function Workspace({ ed }: { ed: Ed }) {
   const cw = Math.min(1, cropWidth(ed, cam?.zoom ?? s?.zoom ?? 1));
   const fx = guideDrag ?? (useExact ? exact!.x : track.length ? at(track, time)[0] : 0.5);
   const guideLeft = Math.min(1 - cw, Math.max(0, fx - cw / 2)) * 100;
-  const listed = [...(ed.cameras?.cameras ?? [])].filter((c) => c.count >= 2).sort((a, b) => b.count - a.count);
-  const camIndex = cam ? listed.findIndex((c) => c.id === cam.id) : -1;
+  const camIndex = cam ? sortedCameras(ed).findIndex((c) => c.id === cam.id) : -1;
   const how = (useExact ? exact!.mode : cam?.manual ? "manual" : "lecturer");
   const guideLabel = cam
-    ? `${camIndex >= 0 ? `Camera ${camIndex + 1}` : "One-off shot"} · ${how === "manual" ? "your framing" : how === "lecturer" ? "on the lecturer" : how === "camera" ? "usual position" : "centred"}${playing ? "" : " · drag to adjust"}`
+    ? `${camIndex >= 0 ? `Camera ${camIndex + 1}${cam.count < 2 ? " (one-off)" : ""}` : "9:16 frame"} · ${how === "manual" ? "your framing" : how === "lecturer" ? "on the speaker" : how === "camera" ? "usual position" : "centred"}${playing ? "" : " · drag to adjust"}`
     : "9:16 frame";
   const guideX = (e: React.PointerEvent<HTMLDivElement>) => {
     const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
@@ -529,14 +528,14 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
       {!tr ? (
         <div className="no-transcript">
           <h2>No transcript yet</h2>
-          <p>Transcribing lets you read the lecture, search it, select by sentence and correct the text. It runs on your GPU, roughly a minute or two per hour of lecture.</p>
+          <p>Transcribing lets you read the video, search it, select by sentence and correct the text. It runs on your GPU, roughly a minute or two per hour of video.</p>
           {ed.transcribeJob ? (
             <div className="render-progress block" role="status">
               <span>Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>
               <progress max={1} value={ed.transcribeJob.progress} />
             </div>
           ) : (
-            <button type="button" className="btn primary" onClick={() => ed.transcribe()}>Transcribe lecture</button>
+            <button type="button" className="btn primary" onClick={() => ed.transcribe()}>Transcribe video</button>
           )}
           <p className="muted small">You can already pick moments on the timeline; captions for your clips are transcribed when you render.</p>
         </div>
@@ -545,8 +544,8 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
           <div className="search-row">
             <label className="search">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
-              <span className="sr">Search lecture</span>
-              <input type="search" dir="auto" value={query} placeholder="Search the lecture" onChange={(e) => setQuery(e.target.value)}
+              <span className="sr">Search the transcript</span>
+              <input type="search" dir="auto" value={query} placeholder="Search the transcript" onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") jump(hitIdx + (e.shiftKey ? -1 : 1)); }} />
               {query && <span className="count">{hits.length ? `${hitIdx + 1} / ${hits.length}` : "no matches"}</span>}
             </label>
@@ -627,7 +626,7 @@ function SourceBadge({ src }: { src: import("./api").Source }) {
   if (src.type === "quran") {
     const where = src.ref?.startsWith("~");
     const title = where ? `Quran: these words appear in ${src.places ?? "several"} places, so no surah/ayah is shown`
-      : src.keep_spoken ? "Quran: the lecturer's own harakat are kept (he is discussing a reading)"
+      : src.keep_spoken ? "Quran: the speaker's own harakat are kept (they are discussing a reading)"
       : "Quran: replaced with the exact mushaf text";
     return (
       <a className="src-badge quran" href={src.url ?? undefined} target="_blank" rel="noreferrer" dir="rtl"
@@ -689,7 +688,7 @@ function TranscriptInfo({ ed }: { ed: Ed }) {
       {upgrading && (
         <Confirm action="Transcribe again" onCancel={() => setUpgrading(false)}
           onConfirm={() => { setUpgrading(false); ed.transcribe("tashkeel"); }}>
-          Transcribe again with accurate Arabic (with harakat)? Your text corrections in this lecture will be replaced.
+          Transcribe again with accurate Arabic (with harakat)? Your text corrections in this video will be replaced.
         </Confirm>
       )}
       {ed.transcribeJob && <span className="small">Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>}

@@ -289,7 +289,7 @@ export function Timeline(p: Props) {
 
   return (
     <div ref={wrap} className="timeline">
-      <canvas ref={over} className="overview" aria-label="Whole lecture overview"
+      <canvas ref={over} className="overview" aria-label="Whole video overview"
         onPointerDown={overDown} onPointerMove={overMove} onPointerUp={overUp} />
       <canvas ref={main} className="wave" aria-label="Timeline: drag to select, click to seek, drag along the times at the top to scrub, Ctrl+scroll to zoom"
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />

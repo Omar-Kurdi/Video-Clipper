@@ -1,4 +1,4 @@
-"""Lecture Shorts web app: REST API + the built frontend.
+"""Video Clipper web app: REST API + the built frontend.
 
     uvicorn server.app:app --port 8000
 """
@@ -26,7 +26,7 @@ from shorts.translate import load as load_translation
 from . import media, store
 from .jobs import Jobs
 
-app = FastAPI(title="Lecture Shorts")
+app = FastAPI(title="Video Clipper")
 
 # leave CPU for the desktop: OpenCV would otherwise use every core
 cv2.setNumThreads(max(2, (os.cpu_count() or 4) // 2))
@@ -201,14 +201,14 @@ def retry_import(lid: str):
     """Try a failed import again: download a link again, or analyse the video again."""
     meta = store.get_lecture(lid)
     if meta.get("status") != "error":
-        raise HTTPException(409, "this lecture didn't fail")
+        raise HTTPException(409, "this video didn't fail")
     url = meta.get("url") or (meta["title"] if meta["title"].startswith(("http://", "https://")) else None)
     if url:
         _download_job(lid, url)
     elif store.source_path(lid).is_file():
         _analyze_job(lid)
     else:
-        raise HTTPException(400, "the video is gone; delete this lecture and add it again")
+        raise HTTPException(400, "the video file is gone; delete it from the library and add it again")
     return _lecture_out(store.get_lecture(lid))
 
 
@@ -387,7 +387,7 @@ def lecture_proofread(lid: str):
     if running:
         return running
     if media.transcript(lid) is None:
-        raise HTTPException(400, "transcribe the lecture first")
+        raise HTTPException(400, "transcribe the video first")
 
     def run(report):
         report(stage="proofreading")
@@ -402,7 +402,7 @@ def lecture_translate(lid: str, lang: str = "en"):
         return running
     data = media.transcript(lid)
     if data is None:
-        raise HTTPException(400, "transcribe the lecture first")
+        raise HTTPException(400, "transcribe the video first")
     if lang not in LANGS or lang == (data.get("language") or "ar"):
         raise HTTPException(400, f"can't translate into {lang}")
 
@@ -580,7 +580,7 @@ def render_short(lid: str, sid: str):
     def run(report):
         if words_path(store.source_path(lid)).exists():
             media.transcript(lid)  # brings the Quran/hadith marks up to date before they're burned in
-        report(stage="finding the lecturer")
+        report(stage="finding the speaker")
         opts.identity = media.cameras(lid)
         tmp = out.with_suffix(".part.mp4")
         res = make_short(store.source_path(lid), tmp, opts,

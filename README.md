@@ -1,11 +1,18 @@
-# Video Clipper — lecture → vertical shorts
+# Video Clipper — long talks → vertical shorts
 
-Turns selected moments of a long, single-speaker lecture into 9:16 shorts:
-pauses removed with optical-flow "morph" cuts, a crop that follows the speaker,
-clean hard cuts on camera changes, styled word captions (right-to-left for
-Arabic) and an optional name plate.
+Turns selected moments of a long video of people talking (a lecture, podcast,
+sermon, interview or any show) into 9:16 shorts: pauses removed with
+optical-flow "morph" cuts, a crop that holds the main speaker on every camera
+(or wherever you place it), clean hard cuts on camera changes, styled word
+captions (right-to-left for Arabic) and an optional name plate. Arabic talks
+also get Quran and hadith quotations recognised and corrected.
 
-Needs `ffmpeg` (with NVENC), an NVIDIA GPU, Pillow built with raqm, Node 18+
+![The library on a first visit](docs/screenshots/landing.png)
+
+![The editor: transcript, video with the 9:16 frame, preview and settings, and the timeline](docs/screenshots/editor.png)
+
+Needs `ffmpeg` (NVENC is used when available), an NVIDIA GPU for
+transcription and translation, Pillow built with raqm, Node 18+
 for the web app, and `pip install -r requirements.txt`.
 
 Models download on first use: about 11 GB for transcription (Whisper 2.9 GB,
@@ -32,29 +39,36 @@ light CPU setting is used, and the render log says which. To run in the foregrou
 
 - **Library** (the home page) – paste a YouTube link or a file path already on
   this computer (linked, not copied) into one field, or drop a video anywhere on
-  the page. Each lecture is analysed once: waveform, pauses, thumbnail. Each
-  lecture lists its shorts; click one to open it.
+  the page. Each video is analysed once: waveform, pauses, thumbnail. Each
+  video lists its shorts; click one to open it.
+
+  ![The library with imported videos and their shorts](docs/screenshots/library.png)
 - **Editor** – one screen, left to right: the transcript (search; click a
   sentence to select it, shift+click to extend, double-click to correct the
   text, and corrections are used in the captions), the video, then the preview
   and settings (clips, cuts, captions, framing). The waveform timeline runs
   under the transcript and video (`I` / `O` to mark, `Enter` to add, drag to
-  select, scroll to move, `Ctrl`+scroll to zoom). Shorts are tabs in the top
+  select, drag along the time ruler to scrub, scroll to move, `Ctrl`+scroll
+  to zoom). Shorts are tabs in the top
   bar, next to the Render button. Selecting in either place selects in both.
   Words the recognisers disagreed on are underlined; click one to pick one of
   the other readings (or keep it) in one click. The word keeps its timing.
   What's in the short is shown in red everywhere: transcript, 9:16 frame and
   timeline.
-- **Framing**: each lecture is analysed once. Camera angles are recognised
+- **Framing**: each video is analysed once. Camera angles are recognised
   by matching the architecture in the picture, so a moving audience, a pan or
-  a small zoom doesn't split one angle into several. The lecturer is found by
-  face recognition, so he is framed even in wide shots where audience faces
+  a small zoom doesn't split one angle into several. The main speaker is found by
+  face recognition, so they are framed even in wide shots where audience faces
   are bigger, and held in the same spot every time an angle comes back.
   Pause and drag the orange frame on the video (or a camera card in the
   Framing tab) to set an angle by hand. It's stored relative to the scene and
   mapped onto every shot of that angle, even if the camera moved. Each angle
   can also have its own zoom. The CLI does the same, cached in
   `<video>.cameras.json/.npz`; use `--no-lock` to just follow the main face.
+  Angles seen only briefly (often cutaways) are framed automatically and
+  hidden from the list; "Show them" lists them too.
+
+  <img src="docs/screenshots/framing.png" alt="Framing settings: one card per camera with its 9:16 frame" width="300">
 - Settings (pause threshold, morph/fade/jump
   cuts, caption style, name plate and caption height, zoom in or out, grade,
   export speed) update a live 9:16 preview;
@@ -80,15 +94,15 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   against the whole Quran and the six hadith books (helped by cues such as
   «قال تعالى» or «قال رسول الله ﷺ»). Without a cue a quotation needs 5 matching
   words; right after one, 2 are enough (e.g. «وَٱلرُّجْزَ فَٱهْجُرْ»), and a verse
-  the lecturer says again straight away counts too. Quran quotations are
+  the speaker says again straight away counts too. Quran quotations are
   replaced by the exact Uthmani text and linked to quran.com. Words that fit
   several places in the Quran are marked as Quran without naming a surah;
-  when the lecturer discusses a reading («وفي قراءة», «قرأ يعقوب», «بالكسر»)
-  his own harakat are kept instead of Hafs. Hadith show their collection,
+  when the speaker discusses a reading («وفي قراءة», «قرأ يعقوب», «بالكسر»)
+  their own harakat are kept instead of Hafs. Hadith show their collection,
   number, grading and sunnah.com link; inside a hadith, a word one of the
   recognisers heard the collection's way (or a doubtful one a letter off) is
   corrected to its wording («الطاعون ريجز» → «الطَّاعُونُ رِجْزٌ»), and the
-  lecturer's own phrasing is otherwise kept. Doubtful words one letter from
+  speaker's own phrasing is otherwise kept. Doubtful words one letter from
   a word of the lecture's title become that word («والرجل» → «والرِّجز» in a
   lecture on الرجز). Texts download once into `models/texts/`. In
   the video, a small gold line above the captions names the surah and ayah
@@ -224,7 +238,7 @@ code: `python tests/test_credits.py` fails when a model or dataset referenced in
 | Proofreading doubtful words (optional, online) | Google [Gemini](https://ai.google.dev) API, newest Flash model your key can use (or `GEMINI_MODEL`) | Google's API terms |
 | Translation | [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) | Apache-2.0 |
 | Face detection | [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (`face_detection_yunet_2023mar.onnx`, OpenCV Zoo) | MIT |
-| Recognising the lecturer | [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (`face_recognition_sface_2021dec.onnx`, OpenCV Zoo) | Apache-2.0 |
+| Recognising the speaker | [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (`face_recognition_sface_2021dec.onnx`, OpenCV Zoo) | Apache-2.0 |
 | Quran text (Uthmani) | [arbml/quran_uthmani](https://huggingface.co/datasets/arbml/quran_uthmani), which appears to be the [Tanzil](https://tanzil.net) Uthmani text: used verbatim, as Tanzil's terms require | Tanzil terms |
 | Quran in English | Saheeh International, from [nassimjp/quran](https://huggingface.co/datasets/nassimjp/quran) (`en-saheeh`) | © Saheeh International; downloaded at runtime, not redistributed |
 | Hadith (six books, grading, English) | [meeAtif/hadith_datasets](https://huggingface.co/datasets/meeAtif/hadith_datasets), from [sunnah.com](https://sunnah.com) | MIT |

@@ -24,7 +24,7 @@ def cmd_make(a) -> None:
         zoom=a.zoom, grade=a.grade, captions=not a.no_captions, speed=a.speed,
         language=a.lang or None, model=a.model, device=a.device)
     if not a.no_lock:
-        print("finding the lecturer and the camera positions (cached after the first run) ...")
+        print("finding the speaker and the camera positions (cached after the first run) ...")
         o.identity = load_or_analyze(a.video, a.video.with_suffix(".cameras.json"))
     make_short(a.video, a.output, o, keep_temp=a.keep_temp)
     print(f"done: {a.output}")
@@ -63,7 +63,7 @@ def main() -> None:
     m.add_argument("--grade", action="store_true", help="punchier contrast/sharpen/vignette")
     m.add_argument("--no-captions", action="store_true")
     m.add_argument("--no-lock", action="store_true",
-                   help="follow the main face instead of recognising and locking on the lecturer")
+                   help="follow the main face instead of recognising and locking on the speaker")
     m.add_argument("--keep-temp", action="store_true")
     m.set_defaults(fn=cmd_make)
 

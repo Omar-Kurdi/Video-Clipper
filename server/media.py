@@ -118,7 +118,7 @@ def analyze(lid: str, report) -> dict:
                                                  "peaks": _waveform(src, info["duration"])}))
     report(progress=0.7, stage="finding pauses")
     (d / "speech.json").write_text(json.dumps(_speech(src)))
-    report(progress=0.85, stage="finding the lecturer and cameras")
+    report(progress=0.85, stage="finding the speaker and cameras")
     cameras(lid)
     store.update_lecture(lid, status="ready")
     return info

@@ -115,10 +115,10 @@ export function Landing() {
     <div className="landing">
       <div className="wrap">
         <header className="l-header">
-          <a href="#/" className="brand"><Mark /> Lecture Shorts</a>
+          <a href="#/" className="brand"><Mark /> Video Clipper</a>
           <span className="grow" />
           {lectures.length > 0 && (
-            <span className="tc small dim">{lectures.length} lecture{lectures.length === 1 ? "" : "s"} · {shortCount} short{shortCount === 1 ? "" : "s"}</span>
+            <span className="tc small dim">{lectures.length} video{lectures.length === 1 ? "" : "s"} · {shortCount} short{shortCount === 1 ? "" : "s"}</span>
           )}
         </header>
 
@@ -126,16 +126,16 @@ export function Landing() {
         <section className={`hero ${returning ? "compact" : ""}`}>
           <div className="hero-copy">
             {!returning && <>
-              <h1>Hour-long lectures in. Shorts people <em>finish</em>, out.</h1>
-              <p className="lede">Mark the moments in red. Pauses are cut with smooth morphs, the frame follows the speaker, and Arabic captions read right to left.</p>
+              <h1>Long talks in. Shorts people <em>finish</em>, out.</h1>
+              <p className="lede">Lectures, podcasts, sermons, interviews. Mark the moments you want: pauses are cut with smooth morphs, the frame holds the main speaker on every camera (or wherever you place it), and captions are timed word by word, right to left for Arabic.</p>
             </>}
             <form className="import" onSubmit={submit}>
-              <label htmlFor="src" className="eyebrow">Add a lecture</label>
+              <label htmlFor="src" className="eyebrow">Add a video</label>
               <div className="import-box">
                 <input id="src" type="text" value={value} dir="auto" autoComplete="off" spellCheck={false}
                   onChange={(e) => { setValue(e.target.value); setError(null); }}
                   placeholder="YouTube link or a file path on this computer" />
-                <select aria-label="Lecture language" value={lang} onChange={(e) => setLang(e.target.value)}>
+                <select aria-label="Spoken language" value={lang} onChange={(e) => setLang(e.target.value)}>
                   <option value="ar">Arabic</option>
                   <option value="en">English</option>
                   <option value="auto">Detect</option>
@@ -163,21 +163,21 @@ export function Landing() {
             {lectures.length > 3 && (
               <label className="search">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
-                <span className="sr">Search lectures</span>
-                <input type="search" dir="auto" value={query} placeholder="Search lectures" onChange={(e) => setQuery(e.target.value)} />
+                <span className="sr">Search videos</span>
+                <input type="search" dir="auto" value={query} placeholder="Search videos" onChange={(e) => setQuery(e.target.value)} />
               </label>
             )}
           </div>
           {loaded && lectures.length === 0 ? <EmptyLibrary onChoose={() => fileRef.current?.click()} /> : (
             <ul className="lib-list">
-              {query && shown.length === 0 && <li className="lib-none">No lecture title matches “{query}”.</li>}
+              {query && shown.length === 0 && <li className="lib-none">No video title matches “{query}”.</li>}
               {shown.map((l) => (
                 <li key={l.id} className="lib-row">
                   <div className="thumb" style={l.status === "ready" ? { backgroundImage: `url(${api.thumbUrl(l.id)})` } : undefined} />
                   <div className="lib-main">
                     <span className={`lib-title ${/[؀-ۿ]/.test(l.title) ? "ar" : ""}`} dir="auto">{l.title}</span>
                     {l.status === "error" ? (
-                      <span className="err">{l.job?.message ? `Import failed: ${l.job.message}` : "Import failed. Remove it and add the lecture again."}</span>
+                      <span className="err">{l.job?.message ? `Import failed: ${l.job.message}` : "Import failed. Remove it and add the video again."}</span>
                     ) : (
                       <span className="lib-meta tc">
                         {l.duration ? fmt(l.duration, 0) : "—"}{l.language ? ` · ${LANG_NAME[l.language] ?? l.language}` : ""} · {statusText(l)}
@@ -198,14 +198,14 @@ export function Landing() {
                       </div>
                     )}
                     {deleting === l.id && (
-                      <Confirm action="Delete lecture" cancel="Keep it" onCancel={() => { setDeleting(null); setAlsoOriginal(false); }}
+                      <Confirm action="Delete video" cancel="Keep it" onCancel={() => { setDeleting(null); setAlsoOriginal(false); }}
                         onConfirm={async () => {
                           setDeleting(null);
                           await api.deleteLecture(l.id, alsoOriginal).catch((e) => setError(e.message));
                           setAlsoOriginal(false);
                           refresh();
                         }}>
-                        Delete this lecture and its {l.shorts} short{l.shorts === 1 ? "" : "s"}
+                        Delete this video and its {l.shorts} short{l.shorts === 1 ? "" : "s"}
                         {l.disk ? <> (the video, renders and transcript: {fmtBytes(l.disk.bytes + (alsoOriginal ? l.disk.linked_bytes : 0))} freed)</> : null}?
                         {l.disk?.linked && (
                           <label className="confirm-check">
@@ -231,7 +231,7 @@ export function Landing() {
             </ul>
           )}
         </section>
-        <footer className="l-footer tc">Lecture Shorts · runs on this computer</footer>
+        <footer className="l-footer tc">Video Clipper · runs on this computer</footer>
       </div>
       {dropping && <div className="drop-veil" aria-hidden="true"><span>Drop the video to add it</span></div>}
     </div>
@@ -267,12 +267,12 @@ function HeroPage({ thumb }: { thumb: string | null }) {
 function EmptyLibrary({ onChoose }: { onChoose: () => void }) {
   return (
     <div className="empty-lib">
-      <h3>Add your first lecture</h3>
-      <p>Paste a YouTube link or a file path above, or drop a video here. Each lecture is analysed once: waveform, pauses, cameras and the lecturer's face.</p>
+      <h3>Add your first video</h3>
+      <p>Paste a YouTube link or a file path above, or drop a video here. Each video is analysed once: waveform, pauses, cameras and the speaker's face.</p>
       <button type="button" className="drop-zone" onClick={onChoose}>Drop a video file here, or click to choose one</button>
       <ul className="facts">
         <li><b>Pauses cut smoothly</b><span>Silences are found from the audio and blended with an optical-flow morph, so the speaker never jumps.</span></li>
-        <li><b>The frame follows the speaker</b><span>A 9:16 window holds the lecturer and switches on the exact frame the camera changes.</span></li>
+        <li><b>The frame follows the speaker</b><span>A 9:16 window holds the speaker and switches on the exact frame the camera changes.</span></li>
         <li><b>Captions that read right</b><span>Word-timed, right to left for Arabic, with harakat if you want them, or in English.</span></li>
         <li><b>Quran named on screen</b><span>While a verse is quoted, a small line above the captions names the surah and ayah.</span></li>
       </ul>

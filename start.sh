@@ -26,7 +26,7 @@ echo $! >"$PID_FILE"
 for _ in $(seq 1 40); do
   url=$(grep -ao 'http://[^ ]*' "$LOG" | head -1 || true)
   if [ -n "$url" ] && grep -aq "Application startup complete" "$LOG"; then
-    echo "Lecture Shorts is running: $url"
+    echo "Video Clipper is running: $url"
     echo "Stop it with ./stop.sh   (logs: $LOG)"
     exit 0
   fi
