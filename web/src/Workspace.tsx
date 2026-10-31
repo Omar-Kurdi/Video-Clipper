@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, type Range, type Word } from "./api";
+import { api, type Moment, type Range, type Word } from "./api";
 import { Confirm } from "./Confirm";
 import { TopBar, type Ed } from "./Editor";
 import { CaptionsPanel, ClipStrip, ExportPanel, FramingPanel, PausesPanel, Preview, Stats, cropWidth, sortedCameras, summary, type Section } from "./panels";
@@ -571,6 +571,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
             </ViewMenu>
           </div>
           <TranscriptInfo ed={ed} />
+          <Moments ed={ed} onSelect={onSelect} seek={seek} />
           <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""}`} onMouseUp={onMouseUp}>
             {body}
           </article>
@@ -667,6 +668,54 @@ function ViewMenu({ children }: { children: ReactNode }) {
       <summary className="btn small">View</summary>
       <div className="view-pop">{children}</div>
     </details>
+  );
+}
+
+/** Moments Gemini suggests as shorts on their own; one click selects one. */
+function Moments({ ed, onSelect, seek }: { ed: Ed; onSelect: (r: Range | null) => void; seek: (t: number) => void }) {
+  const [list, setList] = useState<Moment[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(true);
+  const id = ed.lecture.id;
+  useEffect(() => { setList(null); api.moments(id).then((m) => setList(m.moments)).catch(() => {}); }, [id]);
+  if (!ed.gemini) return null;
+  const suggest = async () => {
+    setBusy(true); setErr(null);
+    try { setList((await api.suggestMoments(id)).moments); setOpen(true); }
+    catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const inShort = (m: Moment) => (ed.short?.ranges ?? []).some(([a, b]) => a < m.e && b > m.s);
+  return (
+    <div className="moments">
+      <div className="moments-head">
+        {list?.length ? (
+          <button type="button" className="link small" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? "▾" : "▸"} {list.length} suggested moment{list.length === 1 ? "" : "s"}
+          </button>
+        ) : <span className="small muted">{list ? "No moments found." : "Let Gemini find moments that work as shorts on their own."}</span>}
+        <button type="button" className="btn small" disabled={busy} onClick={suggest}
+          title="Sends the transcript text (not the audio) to Gemini (Google).">
+          {busy ? "Reading the transcript…" : list ? "Suggest again" : "Suggest moments"}
+        </button>
+      </div>
+      {err && <p className="small err-text">{err}</p>}
+      {open && !!list?.length && (
+        <ol className="moment-list">
+          {list.map((m) => (
+            <li key={`${m.s}-${m.e}`} className={inShort(m) ? "in" : ""}>
+              <button type="button" className="moment" onClick={() => { onSelect([m.s, m.e]); seek(m.s); }}
+                title="Select this moment (then Add to the short)">
+                <span className="tc small">{fmt(m.s, 0)}–{fmt(m.e, 0)}</span>
+                <b dir="auto">{m.title}</b>
+                <span className="small muted">{m.reason} · {Math.round(m.e - m.s)} s</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
   );
 }
 

@@ -1,11 +1,38 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Camera, type Range, type StyleData, type TextStyle } from "./api";
+import { api, type Camera, type Post, type Range, type StyleData, type TextStyle } from "./api";
 import type { Ed } from "./Editor";
 import { QuickPlayer } from "./Quick";
 import { rememberVolume } from "./Volume";
 import { fmt, parseTime, useDebounced } from "./util";
 
 /* ---------- live 9:16 preview / rendered video ---------- */
+
+/** Where each app's buttons, caption and username sit over a 1080×1920 video
+ * (approximate, as fractions of the frame): keep faces and captions inside. */
+const SAFE_ZONES = {
+  tiktok: { name: "TikTok", top: 0.07, bottom: 0.23, left: 0.05, right: 0.13 },
+  reels: { name: "Reels", top: 0.11, bottom: 0.22, left: 0.05, right: 0.11 },
+  shorts: { name: "Shorts", top: 0.07, bottom: 0.2, left: 0.05, right: 0.11 },
+} as const;
+type Guide = keyof typeof SAFE_ZONES | "off";
+const GUIDE_KEY = "safe-zone-guide";
+
+function storedGuide(): Guide {
+  try { const g = localStorage.getItem(GUIDE_KEY); if (g && (g === "off" || g in SAFE_ZONES)) return g as Guide; } catch { /* storage unavailable */ }
+  return "off";
+}
+
+function SafeZone({ guide, width, height }: { guide: Guide; width: number; height: number }) {
+  if (guide === "off") return null;
+  const z = SAFE_ZONES[guide];
+  return (
+    <div className="safe-zone" aria-hidden="true" style={{ width, height }}>
+      <div className="safe-zone-box" style={{ top: `${z.top * 100}%`, bottom: `${z.bottom * 100}%`, left: `${z.left * 100}%`, right: `${z.right * 100}%` }}>
+        <span>{z.name} safe area</span>
+      </div>
+    </div>
+  );
+}
 
 export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?: number }) {
   const s = ed.short;
@@ -17,6 +44,8 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
   const [tab, setTab] = useState<Tab>(pick);
   const [img, setImg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [guide, setGuideState] = useState<Guide>(storedGuide);
+  const setGuide = (g: Guide) => { setGuideState(g); try { localStorage.setItem(GUIDE_KEY, g); } catch { /* storage unavailable */ } };
   const key = useDebounced(JSON.stringify({ t: Math.round(t * 4) / 4, style: s?.style, style_data: s?.style_data,
     title: s?.title, zoom: s?.zoom, captions: s?.captions, harakat: s?.harakat, caption_lang: s?.caption_lang, quran_tag: s?.quran_tag,
     tr: ed.translation ? 1 : 0 }), 350);
@@ -42,6 +71,8 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
         <button type="button" role="tab" aria-selected={tab === "look"} onClick={() => setTab("look")}>Still at {fmt(t, 0)}</button>
         <button type="button" role="tab" aria-selected={tab === "rendered"} disabled={!s?.rendered} onClick={() => setTab("rendered")}>Rendered</button>
       </div>
+      <div className="preview-stage">
+      <SafeZone guide={guide} width={width} height={height} />
       {tab === "play" && s?.ranges.length ? <QuickPlayer ed={ed} width={width} /> : (
       <div className="phone-frame" style={{ width, height }}>
         {tab === "rendered" && s?.rendered ? (
@@ -52,6 +83,14 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
           <div className="ph">Loading preview…</div>
         )}
       </div>)}
+      </div>
+      <label className="guide-pick small">
+        <span>Safe area</span>
+        <select value={guide} onChange={(e) => setGuide(e.target.value as Guide)}>
+          <option value="off">Off</option>
+          {Object.entries(SAFE_ZONES).map(([k, z]) => <option key={k} value={k}>{z.name}</option>)}
+        </select>
+      </label>
       {tab === "rendered" && s?.rendered && (
         <a className="btn block" href={api.shortVideoUrl(ed.lecture.id, s.id) + "?download=true"} download>Download MP4</a>
       )}
@@ -182,6 +221,102 @@ export function ExportPanel({ ed }: { ed: Ed }) {
       <Help more={<>To only <i>watch</i> faster, use the speed buttons on the players instead.</>}>
         Speeds up the exported video; the voice keeps its pitch.
       </Help>
+      <PostText ed={ed} />
+      <PostYoutube ed={ed} />
+    </div>
+  );
+}
+
+/** Upload the rendered short to the user's own YouTube channel. */
+function PostYoutube({ ed }: { ed: Ed }) {
+  const s = ed.short!;
+  const [yt, setYt] = useState<{ configured: boolean; connected: boolean; channel: string | null } | null>(null);
+  const [privacy, setPrivacy] = useState("private");
+  const [when, setWhen] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const refresh = () => api.youtube().then(setYt).catch(() => {});
+  useEffect(() => {
+    refresh();
+    window.addEventListener("focus", refresh); // back from Google's sign-in tab
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
+  const job = ed.jobs.find((j) => j.short_id === s.id && j.kind === "publish");
+  const running = job && (job.status === "queued" || job.status === "running");
+  const done = s.published?.youtube;
+  if (!yt) return null;
+  const post = async () => {
+    setErr(null);
+    try { await api.publishYoutube(ed.lecture.id, s.id, privacy, when ? new Date(when).getTime() / 1000 : null); }
+    catch (e) { setErr((e as Error).message); }
+  };
+  return (
+    <div className="post-text">
+      <div className="row"><b>YouTube</b>
+        {yt.connected && <span className="small muted">{yt.channel ?? "connected"} · <button type="button" className="link small" onClick={() => api.youtubeDisconnect().then(setYt)}>Disconnect</button></span>}
+      </div>
+      {!yt.configured ? (
+        <Help more="In Google Cloud: create a project, enable the YouTube Data API v3, create an OAuth client of type Desktop app, then put GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.local and restart. See the README.">
+          Set up a Google OAuth client to post to your channel.
+        </Help>
+      ) : !yt.connected ? (
+        <a className="btn small" href="/api/publish/youtube/connect" target="_blank" rel="noreferrer">Connect YouTube channel</a>
+      ) : (
+        <>
+          <label className="field"><span className="small muted">Visibility</span>
+            <select value={privacy} onChange={(e) => setPrivacy(e.target.value)} disabled={!!when}>
+              <option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option>
+            </select></label>
+          <label className="field"><span className="small muted">Publish at (optional)</span>
+            <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></label>
+          <button type="button" className="btn small primary" disabled={!s.rendered || !!running} onClick={post}
+            title={!s.rendered ? "Render the short first" : undefined}>
+            {running ? `Uploading… ${Math.round((job!.progress ?? 0) * 100)}%` : when ? "Schedule on YouTube" : "Post to YouTube"}
+          </button>
+          {job?.status === "error" && <p className="small err-text">{job.message}</p>}
+          {err && <p className="small err-text">{err}</p>}
+          {done && <p className="small">Posted{done.publish_at ? `, goes public ${new Date(done.publish_at * 1000).toLocaleString()}` : ` (${done.privacy})`}: <a href={done.url} target="_blank" rel="noreferrer">{done.url}</a></p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Title, description and hashtags to publish the short with. */
+function PostText({ ed }: { ed: Ed }) {
+  const s = ed.short!;
+  const post = s.post ?? { title: "", description: "", hashtags: [] };
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const set = (p: Partial<Post>) => ed.update({ post: { ...post, ...p } });
+  const write = async () => {
+    setBusy(true); setErr(null);
+    try { ed.update({ post: (await api.describeShort(ed.lecture.id, s.id)).post ?? null }); }
+    catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const text = [post.title, post.description, post.hashtags.map((h) => `#${h}`).join(" ")].filter(Boolean).join("\n\n");
+  const why = !ed.gemini ? "Needs a Gemini key (GEMINI_API_KEY in .env)" : !ed.transcript ? "Transcribe the video first"
+    : !s.ranges.length ? "Add a clip first" : undefined;
+  return (
+    <div className="post-text">
+      <div className="row"><b>Post text</b>
+        <button type="button" className="btn small" disabled={busy || !!why} title={why} onClick={write}>
+          {busy ? "Writing…" : post.title ? "Write again with Gemini" : "Write with Gemini"}
+        </button>
+      </div>
+      {err && <p className="small err-text">{err}</p>}
+      <label className="field"><span className="small muted">Title</span>
+        <input type="text" dir="auto" value={post.title} maxLength={100} placeholder="Shown above the video"
+          onChange={(e) => set({ title: e.target.value })} /></label>
+      <label className="field"><span className="small muted">Description</span>
+        <textarea dir="auto" rows={3} value={post.description} onChange={(e) => set({ description: e.target.value })} /></label>
+      <label className="field"><span className="small muted">Hashtags</span>
+        <input type="text" dir="auto" value={post.hashtags.map((h) => `#${h}`).join(" ")} placeholder="#reminder #quran"
+          onChange={(e) => set({ hashtags: e.target.value.split(/[\s,]+/).map((h) => h.replace(/^#/, "")).filter(Boolean) })} /></label>
+      <button type="button" className="btn small" disabled={!text} onClick={() => {
+        navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+      }}>{copied ? "Copied" : "Copy all"}</button>
     </div>
   );
 }
@@ -276,6 +411,16 @@ export function FramingPanel({ ed }: { ed: Ed }) {
         {s.zoom < 1 ? "Zoomed out: the video no longer fills the screen top to bottom."
           : s.zoom > 1 ? "Zoomed in: a tighter shot of the speaker."
           : "1× uses the full height of the video."}
+      </Help>
+      <fieldset className="follow-pick">
+        <legend>Who to frame</legend>
+        <label className="check"><input type="radio" name="follow" checked={(s.follow ?? "main") === "main"}
+          onChange={() => ed.update({ follow: "main" })} />The main speaker</label>
+        <label className="check"><input type="radio" name="follow" checked={s.follow === "talking"}
+          onChange={() => ed.update({ follow: "talking" })} />Whoever is talking</label>
+      </fieldset>
+      <Help more="For podcasts and interviews with two or more people in the same shot: the frame cuts to the person whose mouth moves with the voice, and holds still for their whole turn. Shown in the rendered short; the quick preview keeps following the main speaker.">
+        {s.follow === "talking" ? "Cuts to the person talking when several people share a shot." : "Holds the person who is on screen most."}
       </Help>
       <div className="cams-head"><b>Cameras</b>
         <Help more="The main speaker is recognised in every shot and held in place. A frame you set applies to every shot from that camera.">Drag a frame to set a camera by hand.</Help>

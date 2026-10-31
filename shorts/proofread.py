@@ -263,3 +263,26 @@ def apply(data: dict, suggestions: list[dict]) -> int:
     _drop_words(data, [])
     data["proofread"] = {"model": suggestions[0]["model"] if suggestions else None, "changed": changed}
     return changed
+
+
+def ask_json(prompt: str, schema: dict, temperature: float = 0.4) -> tuple[object, str]:
+    """A text-only question with a JSON answer (`schema` in Gemini's format).
+    Returns (answer, model). Busy or exhausted models hand over to the next."""
+    key = api_key()
+    if not key:
+        raise ProofreadError("set GEMINI_API_KEY in .env to use Gemini")
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": temperature, "responseMimeType": "application/json",
+                                 "responseSchema": schema}}
+    models = choose_models(key)
+    for model in models:
+        try:
+            res = _call(f"models/{model}:generateContent", key, body)
+            break
+        except (Busy, OutOfQuota):
+            if model == models[-1]:
+                raise
+    try:
+        return json.loads(res["candidates"][0]["content"]["parts"][0]["text"]), model
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise ProofreadError(f"unexpected answer from Gemini: {str(res)[:300]}") from e

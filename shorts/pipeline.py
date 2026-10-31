@@ -37,6 +37,7 @@ class ShortOptions:
     harakat: str = "all"             # tashkeel in captions: all | quran (Quran only) | none
     caption_lang: str = "original"   # "original", or a translation's language code ("en", "ar")
     quran_tag: bool = True           # show the surah and ayah while a Quran verse is quoted
+    follow: str = "main"             # framing: hold the "main" speaker, or cut to whoever is "talking"
     captions: bool = True
     language: str | None = "ar"
     model: str = "large-v3"
@@ -168,7 +169,7 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
         js = joins(segs, d)
         range_joins = [js[i - 1].cut for i in firsts[1:]]
         cb = _stage(progress, "reframe")
-        path = crop_path(cut, ReframeSettings(zoom=o.zoom), forced=range_joins,
+        path = crop_path(cut, ReframeSettings(zoom=o.zoom, follow=o.follow), forced=range_joins,
                          on_frame=lambda i: cb(i / n_out), identity=o.identity)
 
         # same camera -> synthesized transition; camera change -> clean hard cut

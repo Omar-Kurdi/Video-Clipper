@@ -11,8 +11,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 import cv2
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -23,7 +23,7 @@ from shorts.translate import LANGS, translate
 from shorts.translate import edit as edit_translation
 from shorts.translate import load as load_translation
 
-from . import media, store
+from . import media, publish, store
 from .jobs import Jobs
 
 app = FastAPI(title="Video Clipper")
@@ -93,6 +93,8 @@ class ShortIn(BaseModel):
     harakat: str = "all"  # tashkeel in captions: all | quran | none
     caption_lang: str = "original"  # or the language of a saved translation ("en", "ar")
     quran_tag: bool = True  # surah and ayah on screen while a Quran verse is quoted
+    follow: str = "main"  # framing: "main" speaker, or cut to whoever is "talking"
+    post: dict | None = None  # {"title", "description", "hashtags"} to publish the short with
 
 
 class PreviewIn(BaseModel):
@@ -134,7 +136,8 @@ def _options(lecture: dict, s: dict) -> ShortOptions:
         min_gap=s["min_gap"], transition=s["transition"], transition_frames=s["transition_frames"],
         zoom=s["zoom"], grade=s["grade"], captions=s["captions"], language=lecture.get("language"),
         speed=float(s.get("speed", 1.0)), harakat=s.get("harakat", "all"),
-        caption_lang=s.get("caption_lang", "original"), quran_tag=s.get("quran_tag", True))
+        caption_lang=s.get("caption_lang", "original"), quran_tag=s.get("quran_tag", True),
+        follow=s.get("follow", "main"))
 
 
 def _analyze_job(lid: str) -> dict:
@@ -393,6 +396,121 @@ def lecture_proofread(lid: str):
         report(stage="proofreading")
         return media.proofread(lid, lambda f: report(progress=f))
     return jobs.submit("proofread", run, lane="io", lecture_id=lid)
+
+
+def _gemini(fn):
+    from shorts.proofread import ProofreadError
+    try:
+        return fn()
+    except ProofreadError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/lectures/{lid}/shorts/{sid}/describe")
+def short_describe(lid: str, sid: str):
+    """Gemini writes a title, description and hashtags from what the short says."""
+    from shorts.writer import describe
+
+    s = store.get_short(lid, sid)
+    data = media.transcript(lid)
+    if data is None:
+        raise HTTPException(400, "transcribe the video first")
+    if not s["ranges"]:
+        raise HTTPException(400, "add a clip to the short first")
+    lang = s.get("caption_lang") if s.get("caption_lang") not in (None, "original") else (data.get("language") or "ar")
+    post = _gemini(lambda: describe(data, s["ranges"], store.get_lecture(lid).get("title"), lang))
+    s["post"] = post
+    return _short_out(store.save_short(s))
+
+
+# ---------- posting to YouTube ----------
+
+def _yt_redirect(request: Request) -> str:
+    return str(request.base_url) + "api/publish/youtube/callback"
+
+
+@app.get("/api/publish/youtube")
+def youtube_status():
+    return publish.status()
+
+
+@app.get("/api/publish/youtube/connect")
+def youtube_connect(request: Request):
+    try:
+        return RedirectResponse(publish.connect_url(_yt_redirect(request)))
+    except publish.PublishError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/publish/youtube/callback")
+def youtube_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    try:
+        if error:
+            raise publish.PublishError(f"Google sign-in was cancelled ({error})")
+        st = publish.finish_connect(code, state, _yt_redirect(request))
+        msg = f"Connected to {st['channel'] or 'your YouTube channel'}."
+    except publish.PublishError as e:
+        msg = f"Not connected: {e}"
+    import html
+    return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>YouTube</title>"
+                        f"<body style='font-family:system-ui;padding:40px'><p>{html.escape(msg)}</p>"
+                        f"<p>You can close this tab and go back to Video Clipper.</p></body>")
+
+
+@app.post("/api/publish/youtube/disconnect")
+def youtube_disconnect():
+    return publish.disconnect()
+
+
+class PublishIn(BaseModel):
+    privacy: str = Field("private", pattern="^(private|unlisted|public)$")
+    publish_at: float | None = None  # unix time: goes up private, YouTube publishes it then
+
+
+@app.post("/api/lectures/{lid}/shorts/{sid}/publish/youtube")
+def short_publish_youtube(lid: str, sid: str, body: PublishIn):
+    s = store.get_short(lid, sid)
+    video = store.render_path(lid, sid)
+    if not video.exists():
+        raise HTTPException(400, "render the short first")
+    post = s.get("post") or {}
+    title = (post.get("title") or s.get("name") or "Short").strip()
+    tags = post.get("hashtags") or []
+    desc = "\n\n".join(x for x in [post.get("description", "").strip(), " ".join(f"#{h}" for h in tags + ["Shorts"])] if x)
+
+    def run(report):
+        report(stage="uploading to YouTube")
+        out = publish.upload(video, title, desc, tags, body.privacy, body.publish_at, lambda f: report(progress=f))
+        s2 = store.get_short(lid, sid)
+        s2.setdefault("published", {})["youtube"] = {**out, "privacy": body.privacy, "publish_at": body.publish_at,
+                                                     "at": time.time()}
+        store.save_short(s2)
+        return out
+    return jobs.submit("publish", run, lane="io", lecture_id=lid, short_id=sid)
+
+
+def _moments_path(lid: str) -> Path:
+    return store.lecture_dir(lid) / "moments.json"
+
+
+@app.get("/api/lectures/{lid}/moments")
+def lecture_moments(lid: str):
+    p = _moments_path(lid)
+    return json.loads(p.read_text()) if p.exists() else {"moments": None}
+
+
+@app.post("/api/lectures/{lid}/moments")
+def suggest_moments(lid: str):
+    """Gemini reads the transcript and suggests moments that stand on their own."""
+    from shorts.writer import moments
+
+    data = media.transcript(lid)
+    if data is None:
+        raise HTTPException(400, "transcribe the video first")
+    found = _gemini(lambda: moments(data, store.get_lecture(lid).get("title")))
+    out = {"moments": found, "at": time.time()}
+    _moments_path(lid).write_text(json.dumps(out, ensure_ascii=False))
+    return out
 
 
 @app.post("/api/lectures/{lid}/translate")

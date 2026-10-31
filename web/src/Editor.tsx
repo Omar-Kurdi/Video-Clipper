@@ -139,6 +139,12 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
           if (j.kind === "translate") loadTranslation();
           if (j.kind === "proofread") loadTranscript();
           if (j.kind === "cameras") { loadCameras(); setFramingVersion((v) => v + 1); }
+          if (j.kind === "publish") {
+            api.shorts(lectureId).then((list) => setShorts((cur) => cur.map((c) => {
+              const fresh = list.find((l) => l.id === c.id);
+              return fresh ? { ...c, published: fresh.published } : c;
+            })));
+          }
           if (j.kind === "render") {
             setRenderedVersion(Date.now());
             api.shorts(lectureId).then((list) => setShorts((cur) => cur.map((c) => {
@@ -185,7 +191,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
 
   const ed = useMemo<Ed | null>(() => {
     if (!lecture) return null;
-    const renderJob = current ? jobs.find((j) => j.short_id === current.id && (j.status === "queued" || j.status === "running")) ?? null : null;
+    const renderJob = current ? jobs.find((j) => j.short_id === current.id && j.kind === "render" && (j.status === "queued" || j.status === "running")) ?? null : null;
     return {
       lecture, shorts: visible, short: current, update,
       addRange: (r) => {

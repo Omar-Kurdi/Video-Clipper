@@ -13,6 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .talking import audio_level, mouth_patch, turns
+
 MODEL_URL = ("https://github.com/opencv/opencv_zoo/raw/main/models/"
              "face_detection_yunet/face_detection_yunet_2023mar.onnx")
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "face_detection_yunet_2023mar.onnx"
@@ -44,6 +46,7 @@ class ReframeSettings:
     smooth: float = 0.4        # gaussian sigma on the face track (s)
     hold: float = 0.07         # with a known lecturer: how far (fraction of width) he may move before the frame follows
     face_y: float = 0.36       # where the face sits vertically in the crop (only when zoom > 1)
+    follow: str = "main"       # "main": hold the main speaker; "talking": cut to whoever is talking
 
 
 def _detector(w: int, h: int):
@@ -53,8 +56,9 @@ def _detector(w: int, h: int):
     return cv2.FaceDetectorYN.create(str(MODEL_PATH), "", (w, h), 0.6, 0.3, 50)
 
 
-def _scan(video: Path, on_frame=None):
-    """One pass: face detections every few frames + per-frame change scores."""
+def _scan(video: Path, on_frame=None, mouths: bool = False):
+    """One pass: face detections every few frames + per-frame change scores.
+    With `mouths`, each face also carries a cut-out of its mouth (talking.py)."""
     cap = cv2.VideoCapture(str(video))
     fps = cap.get(cv2.CAP_PROP_FPS)
     W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -80,8 +84,11 @@ def _scan(video: Path, on_frame=None):
         if i % step == 0:
             img = cv2.resize(frame, (DETECT_WIDTH, round(H * scale)), interpolation=cv2.INTER_AREA)
             _, faces = det.detect(img)
+            # mouths are cut from the full-resolution frame: small faces in wide shots need every pixel
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if mouths and faces is not None else None
             found = [] if faces is None else [
                 ((f[0] + f[2] / 2) / scale, (f[1] + f[3] / 2) / scale, f[2] / scale, float(f[14]))
+                + ((mouth_patch(gray, f, 1 / scale),) if mouths else ())
                 for f in faces]
             samples.append((i, found))
         i += 1
@@ -182,7 +189,7 @@ class CropPath:
     ch: int
     xs: np.ndarray
     ys: np.ndarray
-    camera_changes: list[int]  # frames where the source itself cuts to another shot
+    camera_changes: list[int]  # frames where the source itself cuts to another shot (or to another person talking)
     thumbs: np.ndarray         # per-frame grey thumbnail of the frame centre
     cws: np.ndarray | None = None  # per-frame crop size (cameras can have their own zoom)
     chs: np.ndarray | None = None
@@ -244,7 +251,12 @@ def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
     lecturer is recognised in every shot and the frame is locked on him (or on
     a camera's manual framing); without it the main face is followed.
     """
-    fps, W, H, n, d1, dlong, samples, thumbs = _scan(video, on_frame)
+    talking = rs.follow == "talking"
+    fps, W, H, n, d1, dlong, samples, thumbs = _scan(video, on_frame, mouths=talking)
+    if talking and samples:
+        speech = audio_level(video, np.array([i / fps for i, _ in samples]))
+        speech_at = {i: s for (i, _), s in zip(samples, speech)}
+    switches: list[int] = []
     ch, cw = crop_size(W, H, rs.zoom)
     cws, chs = np.full(n, cw), np.full(n, ch)
 
@@ -261,7 +273,21 @@ def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
         info = shots[k] if shots else None
         if info and info.get("zoom"):
             chs[a:b], cws[a:b] = crop_size(W, H, info["zoom"])
-        if info and info["manual"]:
+        if talking and not (info and info["manual"]):
+            # cut to whoever is talking; hold still through each turn
+            shot = [(i, faces) for i, faces in samples if a <= i < b]
+            picks = turns([(i / fps, [(f[0], f[1], f[2], f[4]) for f in faces]) for i, faces in shot],
+                          np.array([speech_at[i] for i, _ in shot]), W, fps / max(1, round(fps / SAMPLES_PER_SEC)))
+            cur = next((q for q in picks if q is not None), last)
+            cx_all[a:b], cy_all[a:b] = cur
+            for (i, _), q in zip(shot, picks):
+                if q is not None and abs(q[0] - cur[0]) > 0.05 * W:
+                    switches.append(i)
+                if q is not None:
+                    cur = q
+                cx_all[i:b], cy_all[i:b] = cur
+            log.append("talking")
+        elif info and info["manual"]:
             # the user placed this camera's frame: hold it exactly
             mx = info["manual"]["x"] * W
             my = info["manual"].get("y", (info["camera_framing"] or (0.5, 0.36))[1]) * H
@@ -304,7 +330,9 @@ def crop_path(video: Path, rs: ReframeSettings, forced: list[int] = (),
     ys = np.clip(np.round(cy_all - rs.face_y * chs), 0, H - chs).astype(int)
     print(f"reframe: {n} frames, camera changes at "
           f"{[round(b / fps, 2) for b in detected[1:]]}, crop {cw}x{ch}, shots: {log}")
-    return CropPath(cw, ch, xs, ys, detected[1:], thumbs, cws, chs)
+    if switches:
+        print(f"reframe: cut to another person talking at {[round(f / fps, 2) for f in switches]}")
+    return CropPath(cw, ch, xs, ys, sorted(detected[1:] + switches), thumbs, cws, chs)
 
 
 def ease_crop_across(path: CropPath, start: int, d: int) -> None:

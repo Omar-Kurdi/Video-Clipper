@@ -9,7 +9,9 @@ also get Quran and hadith quotations recognised and corrected.
 
 ![The library on a first visit](docs/screenshots/landing.png)
 
-![The editor: transcript, video with the 9:16 frame, preview and settings, and the timeline](docs/screenshots/editor.png)
+![The editor on an English interview: suggested moments, the transcript, the video with its 9:16 frame, the preview and the timeline](docs/screenshots/editor.png)
+
+![The editor on an Arabic lecture, with the TikTok safe area shown on the preview](docs/screenshots/editor-ar.png)
 
 Needs `ffmpeg` (NVENC is used when available), an NVIDIA GPU for
 transcription and translation, Pillow built with raqm, Node 18+
@@ -42,7 +44,7 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   the page. Each video is analysed once: waveform, pauses, thumbnail. Each
   video lists its shorts; click one to open it.
 
-  ![The library with imported videos and their shorts](docs/screenshots/library.png)
+  ![Your shorts and the library](docs/screenshots/library.png)
 - **Editor** – one screen, left to right: the transcript (search; click a
   sentence to select it, shift+click to extend, double-click to correct the
   text, and corrections are used in the captions), the video, then the preview
@@ -119,6 +121,38 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   The key can live in `.env` or `.env.local` (both git-ignored). On the free
   tier Google may use what you send to improve its products. On the Sa'd test
   lecture it took word errors from 6.6 % to 6.2 % (letters 4.1 % → 3.3 %).
+- **Suggested moments** (optional, online, needs the Gemini key): **Suggest
+  moments** above the transcript sends the transcript text (not the audio) to
+  Gemini, which picks complete thoughts of 20–90 s that stand on their own (a
+  question with its answer, a story with its point) and says why. Click one to
+  select it, then add it to a short. Moments already in the short get a red bar.
+- **Who to frame**: under Framing, *The main speaker* holds the person on
+  screen most (lectures, sermons). *Whoever is talking* is for podcasts and
+  interviews: in a shot with several people, each mouth is measured (anchored
+  on the face's mouth corners, so near and far faces count the same) and
+  matched against the sound, and the frame cuts to the person talking and
+  holds still for their whole turn; it never pans from one person to another.
+  It applies to the render; the quick preview keeps following the main speaker.
+
+  <img src="docs/screenshots/follow.png" alt="Framing: who to frame, the main speaker or whoever is talking" width="300">
+- **Safe area**: under the preview, show where TikTok, Reels or Shorts put
+  their buttons and text, so faces and captions stay clear of them (approximate).
+- **Post text**: under Export, a title, description and hashtags for the short
+  (yours, or **Write with Gemini** from what the short says, in its language),
+  with **Copy all** for pasting into any app.
+
+  <img src="docs/screenshots/export.png" alt="Export: post text written by Gemini, and posting to YouTube" width="300">
+- **Post to YouTube** (optional): upload the rendered short to your own
+  channel (private, unlisted, public, or scheduled), with its post text and
+  #Shorts. Setup, once: in [Google Cloud](https://console.cloud.google.com/)
+  create a project, enable the **YouTube Data API v3**, set up the OAuth consent
+  screen (External, add yourself as a test user), create an OAuth client of
+  type **Desktop app**, and put `GOOGLE_CLIENT_ID=` and `GOOGLE_CLIENT_SECRET=`
+  in `.env.local`. Restart, then **Connect YouTube channel** under Export
+  signs in on Google's own page. The token stays in `data/accounts/` on this
+  computer. Until Google verifies your app, uploads from an unverified app may
+  be locked to private. TikTok and Instagram need an app reviewed by them (and
+  Instagram a public video URL), so they aren't built in yet.
 - **Translation** (optional): **Translate to English** (or to Arabic, for an
   English lecture) translates every sentence on the GPU with
   Qwen3-4B-Instruct. Whole Quran verses use the Saheeh International

@@ -107,7 +107,6 @@ export function Landing() {
     return q ? lectures.filter((l) => normalize(l.title).includes(q)) : lectures;
   }, [lectures, query]);
   const shortCount = lectures.reduce((n, l) => n + l.shorts, 0);
-  const latest = lectures.find((l) => l.status === "ready");
   const v = value.trim();
   const returning = lectures.length > 0;
 
@@ -126,6 +125,7 @@ export function Landing() {
         <section className={`hero ${returning ? "compact" : ""}`}>
           <div className="hero-copy">
             {!returning && <>
+              <span className="eyebrow">Clipping for long talks · runs on your computer</span>
               <h1>Long talks in. Shorts people <em>finish</em>, out.</h1>
               <p className="lede">Lectures, podcasts, sermons, interviews. Mark the moments you want: pauses are cut with smooth morphs, the frame holds the main speaker on every camera (or wherever you place it), and captions are timed word by word, right to left for Arabic.</p>
             </>}
@@ -152,9 +152,12 @@ export function Landing() {
               )}
               <input ref={fileRef} type="file" accept="video/*,.mkv" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) upload(f); }} />
             </form>
+            {!returning && <Trust />}
           </div>
-          {!returning && <HeroPage thumb={latest ? api.thumbUrl(latest.id) : null} />}
+          {!returning && <HeroArt />}
         </section>
+
+        {returning && <ShortsGallery lectures={lectures} shorts={shorts} open={open} />}
 
         <section ref={libRef} className="library" aria-labelledby="lib-h">
           <div className="lib-head">
@@ -231,6 +234,7 @@ export function Landing() {
             </ul>
           )}
         </section>
+        <HowItWorks />
         <footer className="l-footer tc">Video Clipper · runs on this computer</footer>
       </div>
       {dropping && <div className="drop-veil" aria-hidden="true"><span>Drop the video to add it</span></div>}
@@ -238,29 +242,114 @@ export function Landing() {
   );
 }
 
-const HERO_LINES: [string, string, boolean][] = [
-  ["12:02", "قَالَ شَكَا أَهْلُ الْكُوفَةِ سَعْدًا إِلَى عُمَرَ", false],
-  ["12:09", "فَأَرْسَلَ إِلَيْهِ فَقَالَ: يَا أَبَا إِسْحَاقَ، إِنَّ هَؤُلَاءِ يَزْعُمُونَ أَنَّكَ لَا تُحْسِنُ تُصَلِّي", true],
-  ["12:16", "قَالَ: أَمَّا أَنَا وَاللَّهِ فَإِنِّي كُنْتُ أُصَلِّي بِهِمْ صَلَاةَ رَسُولِ اللَّهِ ﷺ", false],
-];
-
-/** The hero's picture: a ruled transcript page with one sentence in red, and the short it becomes. */
-function HeroPage({ thumb }: { thumb: string | null }) {
+/** Three promises under the import field. */
+function Trust() {
   return (
-    <div className="hero-art" aria-hidden="true">
-      <div className="page">
-        {HERO_LINES.map(([t, text, inShort]) => (
-          <div key={t} className={`page-line ${inShort ? "in" : ""}`}>
-            <span className="tc">{t}</span>
-            <p dir="rtl" lang="ar">{text}</p>
-          </div>
-        ))}
+    <ul className="trust">
+      <li><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg>Runs on your computer</li>
+      <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v18M18 3v18M6 12h12" /></svg>Frame-exact cuts</li>
+      <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h7a3 3 0 013 3v12a2 2 0 00-2-2H4zM20 5h-6" /><path d="M14 8a3 3 0 013-3h3v13h-6" /></svg>Quran- and hadith-aware</li>
+    </ul>
+  );
+}
+
+/** The hero's picture: a wide shot of two people talking, the 9:16 window on
+ * the one speaking, and the vertical short it becomes. Drawn, so it needs no footage. */
+function HeroArt() {
+  const person = (x: number, shirt: string, talking: boolean) => (
+    <g>
+      <ellipse cx={x} cy={262} rx={62} ry={84} fill={shirt} />
+      <circle cx={x} cy={132} r={36} fill="#C99A7A" />
+      <path d={`M${x - 37} ${122} q37 -46 74 0`} fill="#2A2522" />
+      <path d={`M${x - 12} ${152} q12 ${talking ? 13 : 4} 24 0`} stroke="#5A2E22" strokeWidth={4} fill={talking ? "#5A2E22" : "none"} strokeLinecap="round" />
+    </g>
+  );
+  return (
+    <div className="hero-art ba" aria-hidden="true">
+      <div className="ba-wide">
+        <svg viewBox="0 0 480 270" preserveAspectRatio="xMidYMid slice">
+          <rect width="480" height="270" fill="#1D2723" />
+          <rect x="0" y="0" width="480" height="150" fill="#24312C" />
+          <rect x="300" y="26" width="120" height="84" fill="#2E3E37" />
+          <rect x="20" y="200" width="440" height="70" rx="18" fill="#2F4A44" />
+          {person(140, "#E9E2D6", false)}
+          {person(336, "#7A2731", true)}
+        </svg>
+        <div className="ba-frame" style={{ left: "70%" }}><span>9:16</span></div>
+        <span className="ba-label tc">16:9 source</span>
       </div>
-      <div className="hero-slip" style={thumb ? { backgroundImage: `url(${thumb})` } : undefined}>
-        <span className="hero-tag">Bukhari 755</span>
-        <span className="hero-cap" dir="rtl" lang="ar">يَا أَبَا إِسْحَاقَ</span>
+      <div className="ba-short">
+        <svg viewBox="0 0 108 192" preserveAspectRatio="xMidYMid slice">
+          <rect width="108" height="192" fill="#1D2723" />
+          <rect x="0" y="0" width="108" height="100" fill="#24312C" />
+          <ellipse cx="54" cy="176" rx="42" ry="58" fill="#7A2731" />
+          <circle cx="54" cy="86" r="24" fill="#C99A7A" />
+          <path d="M30 79 q24 -32 48 0" fill="#2A2522" />
+          <path d="M46 98 q8 9 16 0" stroke="#5A2E22" strokeWidth="3" fill="#5A2E22" strokeLinecap="round" />
+        </svg>
+        <span className="hero-tag">Al-Baqarah 153</span>
+        <span className="hero-cap" dir="rtl" lang="ar">إِنَّ ٱللَّهَ مَعَ ٱلصَّٰبِرِينَ</span>
       </div>
     </div>
+  );
+}
+
+/** Every rendered short in the library, newest first. */
+function ShortsGallery({ lectures, shorts, open }: {
+  lectures: Lecture[]; shorts: Record<string, Short[]>; open: (l: Lecture, short?: string) => void;
+}) {
+  const done = lectures.flatMap((l) => (shorts[l.id] ?? []).filter((s) => s.rendered).map((s) => ({ l, s })))
+    .sort((a, b) => (b.s.last_render?.at ?? 0) - (a.s.last_render?.at ?? 0));
+  if (!done.length) return null;
+  return (
+    <section className="gallery" aria-labelledby="gal-h">
+      <h2 id="gal-h">Your shorts</h2>
+      <ul>
+        {done.map(({ l, s }) => (
+          <li key={s.id}>
+            <a href={`#/l/${l.id}/edit/${s.id}`} onClick={(e) => { e.preventDefault(); open(l, s.id); }}>
+              <i style={{ backgroundImage: `url(${api.shortThumb(l.id, s.id, s.last_render?.at)})` }} />
+              <b dir="auto">{s.post?.title || s.name}</b>
+              <span dir="auto" className="small muted">{l.title}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** What it does differently, and the four steps. */
+function HowItWorks() {
+  return (
+    <section className="how" aria-labelledby="how-h">
+      <span className="eyebrow">The difference</span>
+      <h2 id="how-h">The difference is in the details.</h2>
+      <div className="diff">
+        <figure>
+          <figcaption><b>Pauses</b><span>A plain cut makes the speaker jump. A morph moves them into place.</span></figcaption>
+          <div className="diff-pair">
+            <div className="cut-demo plain" aria-hidden="true"><i /><i /><i /></div>
+            <div className="cut-demo morph" aria-hidden="true"><i /><i /><i /></div>
+          </div>
+          <div className="diff-labels small muted"><span>Plain cut</span><span>Video Clipper</span></div>
+        </figure>
+        <figure>
+          <figcaption><b>Quran</b><span>A recogniser writes what it heard. Your captions get the mushaf text, with the surah and ayah.</span></figcaption>
+          <div className="diff-pair text">
+            <p dir="rtl" lang="ar" className="heard">ان الله مع الصابرين</p>
+            <p dir="rtl" lang="ar" className="quran">إِنَّ ٱللَّهَ مَعَ ٱلصَّٰبِرِينَ<small>البقرة ١٥٣</small></p>
+          </div>
+          <div className="diff-labels small muted"><span>Heard</span><span>In your captions</span></div>
+        </figure>
+      </div>
+      <ol className="steps">
+        <li><span className="tc">01</span><b>Add</b><span>A YouTube link or a file on this computer.</span></li>
+        <li><span className="tc">02</span><b>Mark</b><span>Select sentences in the transcript, or take a suggested moment.</span></li>
+        <li><span className="tc">03</span><b>Tune</b><span>Captions, framing per camera, pause length, safe area.</span></li>
+        <li><span className="tc">04</span><b>Render</b><span>A 9:16 MP4, ready to post, with its title and description.</span></li>
+      </ol>
+    </section>
   );
 }
 

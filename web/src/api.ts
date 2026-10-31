@@ -2,7 +2,7 @@ export type Range = [number, number];
 
 export interface Job {
   id: string;
-  kind: "download" | "analyze" | "transcribe" | "translate" | "proofread" | "render" | "cameras";
+  kind: "download" | "analyze" | "transcribe" | "translate" | "proofread" | "render" | "cameras" | "publish";
   status: "queued" | "running" | "done" | "error";
   progress: number;
   stage: string;
@@ -73,11 +73,20 @@ export interface ShortSettings {
   harakat?: "all" | "quran" | "none";  // tashkeel in captions
   caption_lang?: string;  // "original", or a translation's language ("en", "ar")
   quran_tag?: boolean;    // surah and ayah on screen while a Quran verse is quoted
+  follow?: "main" | "talking";  // framing: hold the main speaker, or cut to whoever is talking
+  post?: Post | null;     // what to publish the short with
 }
+
+export interface Post { title: string; description: string; hashtags: string[]; model?: string }
+
+export interface Moment { s: number; e: number; title: string; reason: string }
+
+export interface Published { id: string; url: string; privacy: string; publish_at: number | null; at: number }
 
 export interface Short extends ShortSettings {
   id: string;
   lecture_id: string;
+  published?: { youtube?: Published };
   created: number;
   rendered: boolean;
   job: Job | null;
@@ -184,6 +193,13 @@ export const api = {
     req<Transcript>(`/api/lectures/${id}/transcript/segments/${k}`, json({ text }, "PUT")),
   features: () => req<{ gemini: boolean }>("/api/features"),
   proofread: (id: string) => req<Job>(`/api/lectures/${id}/proofread`, { method: "POST" }),
+  describeShort: (id: string, sid: string) => req<Short>(`/api/lectures/${id}/shorts/${sid}/describe`, { method: "POST" }),
+  youtube: () => req<{ configured: boolean; connected: boolean; channel: string | null }>("/api/publish/youtube"),
+  youtubeDisconnect: () => req<{ configured: boolean; connected: boolean; channel: string | null }>("/api/publish/youtube/disconnect", { method: "POST" }),
+  publishYoutube: (id: string, sid: string, privacy: string, publish_at: number | null) =>
+    req<Job>(`/api/lectures/${id}/shorts/${sid}/publish/youtube`, json({ privacy, publish_at })),
+  moments: (id: string) => req<{ moments: Moment[] | null }>(`/api/lectures/${id}/moments`),
+  suggestMoments: (id: string) => req<{ moments: Moment[] }>(`/api/lectures/${id}/moments`, { method: "POST" }),
   /** settle a doubtful word: another reading (may be several words, or "" to remove it), or null to keep it */
   editWord: (id: string, i: number, text: string | null) =>
     req<Transcript>(`/api/lectures/${id}/transcript/words/${i}`, json({ text }, "PUT")),
