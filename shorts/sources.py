@@ -381,13 +381,37 @@ def find_hadith(words: list[str], quran: list[dict] | None = None,
         that aren't (attribution such as «ومسلم في صحيحيهما عن» doesn't count)."""
         last, miss = a, 0
         for j in range(a, b):
+            if len(nw[j]) <= 2:  # إن، له، من: in almost every hadith, they don't carry the quotation on
+                continue
             if inside(k, j) and nw[j] not in _FRAME:
                 last, miss = j, 0
             elif nw[j] not in _FRAME and nw[j] not in _ATTRIBUTION:
                 miss += 1
                 if miss >= 3:
                     break
-        return last + 1
+        end = last + 1
+        while end < b and len(nw[end]) <= 2 and inside(k, end):  # «... فكان خيرا له»
+            end += 1
+        return end
+
+    def _span_start(k: int, i: int, lo: int) -> int:
+        """The scan looks at windows a few words apart: walk back from the window
+        to the quotation's first word (before 3 in a row that aren't the hadith's)."""
+        first, miss = i, 0
+        for j in range(i - 1, lo - 1, -1):
+            if j in taken or len(nw[j]) <= 2:
+                if j in taken:
+                    break
+                continue
+            if inside(k, j) and nw[j] not in _FRAME:
+                first, miss = j, 0
+            elif nw[j] not in _FRAME and nw[j] not in _ATTRIBUTION:
+                miss += 1
+                if miss >= 3:
+                    break
+        while first < i and len(nw[first]) <= 2:
+            first += 1
+        return first
 
     def content(k: int, a: int, b: int) -> int:  # words of the hadith itself, not its frame
         return sum(1 for j in range(a, b) if nw[j] not in _FRAME and inside(k, j))
@@ -413,8 +437,9 @@ def find_hadith(words: list[str], quran: list[dict] | None = None,
         k, sc = best_match(i, i + 14)
         if k is not None and sc >= 5.0:
             j = _span_end(k, i, min(len(nw), i + 60))
-            if content(k, i, j) >= 2:
-                out.append(_hadith_span(rows[k], i, j, round(sc, 1), False))
+            st = _span_start(k, i, max(0, out[-1]["w1"] if out else 0, i - 14))
+            if content(k, st, j) >= 2:
+                out.append(_hadith_span(rows[k], st, j, round(sc, 1), False))
             i = j + 1
         else:
             i += 4
@@ -494,6 +519,33 @@ def apply_hadith(words: list[dict], spans: list[dict]) -> int:
                 w["w"] = h.strip("،,.؛:\"‏")
                 w["hadith"] = sp["ref"]
                 w.pop("flag", None)
+                n += 1
+    return n
+
+
+def hadith_gaps(words: list[dict], spans: list[dict]) -> int:
+    """Words of a recognised hadith missing between two words that were heard
+    as the hadith has them (recognisers often drop a quick «لَهُ»), or right at
+    the end of the quotation. Offered on the word before as `missing`, for the
+    user to add with one click; never added on their own, since nothing heard
+    them and lecturers paraphrase. A suggestion turned down (`missing_no`)
+    isn't offered again. Returns suggestions made."""
+    n = 0
+    for sp in spans:
+        if sp["type"] != "hadith" or not sp.get("text"):
+            continue
+        hw = [w.strip("،,.؛:\"‏") for w in sp["text"].split() if norm(w)]
+        span = words[sp["w0"]:sp["w1"]]
+        pairs = [(i, j) for i, j in _align_into([norm(w["w"]) for w in span], [norm(h) for h in hw])
+                 if _close(norm(span[i]["w"]), norm(hw[j]))  # anchors: really the hadith's word,
+                 and norm(hw[j]) not in _FRAME]  # and not its chain («قال [عبد الملك]»): often skipped on purpose
+        gaps = [(i, hw[j + 1:j2]) for (i, j), (i2, j2) in zip(pairs, pairs[1:]) if i2 == i + 1 and 1 <= j2 - j - 1 <= 2]
+        if pairs and pairs[-1][0] == len(span) - 1 and 1 <= len(hw) - pairs[-1][1] - 1 <= 2:
+            gaps.append((pairs[-1][0], hw[pairs[-1][1] + 1:]))  # «... فكان خيرا [له]» and the hadith ends
+        for i, gap in gaps:
+            w, text = span[i], " ".join(h for h in gap if norm(h) not in _FRAME)
+            if text and not w.get("quran") and w.get("missing_no") != text:
+                w["missing"] = text
                 n += 1
     return n
 
@@ -635,13 +687,14 @@ def _drop_words(data: dict, spans: list[dict]) -> None:
         g["w0"], g["w1"] = new_index[g["w0"]], new_index[g["w1"]]
 
 
-SOURCES_VERSION = 7  # bump when matching improves: older transcripts are checked again when opened
+SOURCES_VERSION = 9  # bump when matching improves: older transcripts are checked again when opened
 
 
 def annotate(data: dict) -> dict:
     """Find Quran/hadith in a transcript dict (words.json) and apply the Quran text.
     Safe to run again: earlier Quran replacements are undone first."""
     for w in data["words"]:
+        w.pop("missing", None)
         if "quran" in w or "hadith" in w or "vocab" in w:
             w["w"] = w.pop("spoken", w["w"])
             if w.pop("vocab", None):
@@ -655,6 +708,7 @@ def annotate(data: dict) -> dict:
     apply_quran(words, spans)
     _drop_words(data, spans)
     apply_hadith(data["words"], spans)
+    hadith_gaps(data["words"], spans)
     apply_vocab(data["words"], data.get("title"))
     data["sources"] = [{k: v for k, v in sp.items() if k not in ("tokens", "map", "_pairs")} for sp in spans]
     data["sources_version"] = SOURCES_VERSION

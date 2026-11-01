@@ -111,7 +111,10 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   number, grading and sunnah.com link; inside a hadith, a word one of the
   recognisers heard the collection's way (or a doubtful one a letter off) is
   corrected to its wording («الطاعون ريجز» → «الطَّاعُونُ رِجْزٌ»), and the
-  speaker's own phrasing is otherwise kept. Doubtful words one letter from
+  speaker's own phrasing is otherwise kept. A word of the hadith that no
+  recogniser heard between two that were (often a quick «لَهُ») is offered as a
+  dashed «+ لَهُ» after its word: click it if it was said, × if not. It is
+  never added on its own. Doubtful words one letter from
   a word of the lecture's title become that word («والرجل» → «والرِّجز» in a
   lecture on الرجز). Texts download once into `models/texts/`. In
   the video, a small gold line above the captions names the surah and ayah

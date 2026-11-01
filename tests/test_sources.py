@@ -95,6 +95,24 @@ h = [s for s in d["sources"] if s["type"] == "hadith" and s["ref"]]
 check("attribution words don't end a hadith span", h and norm(d["words"][h[0]["w1"] - 1]["w"]) == "للرب",
       [(s["ref"], " ".join(w["w"] for w in d["words"][s["w0"]:s["w1"]])) for s in h])
 
+# a quick «له» the recognisers dropped is offered (never added), in the middle and at the end;
+# the start of the hadith comes from its first matched word, not from where the scan looked
+TEXT = ("ولذلك النبي صلى الله عليه وسلم تعجب عجبا لأمر المؤمن إن أمر المؤمن كله له خير وليس ذلك إلا للمؤمن "
+        "إن أصابته سراء شكر فكان خيرا وإن أصابته ضراء صبر فكان خيرا فنسأل الله العافية")
+d = annotate(transcript(TEXT))
+ws = d["words"]
+h = [s for s in d["sources"] if s["type"] == "hadith"]
+check("Muslim 2999 found", h and (h[0]["ref"] or "").startswith("Sahih Muslim 2999"), h)
+check("its span starts at «عجبا»", h and norm(ws[h[0]["w0"]]["w"]) == "عجبا", h and ws[h[0]["w0"]]["w"])
+miss = [(norm(w["w"]), w["missing"]) for w in ws if w.get("missing")]
+check("both dropped «له» offered after «خيرا»", [m[0] for m in miss] == ["خيرا", "خيرا"] and all(norm(m[1]) == "له" for m in miss), miss)
+check("nothing added on its own", len(ws) == len(TEXT.split()), len(ws))
+again = annotate(d)
+check("annotating again offers the same", [w.get("missing") for w in again["words"]] == [w.get("missing") for w in ws])
+k = next(i for i, w in enumerate(ws) if w.get("missing"))
+ws[k]["missing_no"] = ws[k]["missing"]
+check("a turned-down suggestion isn't offered again", "missing" not in annotate(d)["words"][k], annotate(d)["words"][k])
+
 # ---------- lecture vocabulary ----------
 
 TITLE = "ما الفرق بين الرِّجز والرِّجس؟ فرقٌ دقيق قد لا تعرفه ـ الشيخ سعيد الكملي"

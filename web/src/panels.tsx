@@ -8,11 +8,12 @@ import { fmt, parseTime, useDebounced } from "./util";
 /* ---------- live 9:16 preview / rendered video ---------- */
 
 /** Where each app's buttons, caption and username sit over a 1080×1920 video
- * (approximate, as fractions of the frame): keep faces and captions inside. */
+ * (fractions of the frame): keep faces and captions inside. TikTok: 130/480/60/140 px;
+ * Reels: Meta's 14% top, 35% bottom, 6% sides; Shorts: Google's 288/672/48/192 px. */
 const SAFE_ZONES = {
-  tiktok: { name: "TikTok", top: 0.07, bottom: 0.23, left: 0.05, right: 0.13 },
-  reels: { name: "Reels", top: 0.11, bottom: 0.22, left: 0.05, right: 0.11 },
-  shorts: { name: "Shorts", top: 0.07, bottom: 0.2, left: 0.05, right: 0.11 },
+  tiktok: { name: "TikTok", top: 0.068, bottom: 0.25, left: 0.056, right: 0.13 },
+  reels: { name: "Reels", top: 0.14, bottom: 0.35, left: 0.06, right: 0.06 },
+  shorts: { name: "Shorts", top: 0.15, bottom: 0.35, left: 0.044, right: 0.178 },
 } as const;
 type Guide = keyof typeof SAFE_ZONES | "off";
 const GUIDE_KEY = "safe-zone-guide";
@@ -221,6 +222,17 @@ export function ExportPanel({ ed }: { ed: Ed }) {
       <Help more={<>To only <i>watch</i> faster, use the speed buttons on the players instead.</>}>
         Speeds up the exported video; the voice keeps its pitch.
       </Help>
+    </div>
+  );
+}
+
+/** After rendering: the post text, and posting to your channels. */
+export function PostPanel({ ed }: { ed: Ed }) {
+  const s = ed.short;
+  if (!s) return null;
+  return (
+    <div className="panel">
+      {!s.rendered && <p className="muted small">Render {s.name} first; then post it from here.</p>}
       <PostText ed={ed} />
       <PostYoutube ed={ed} />
     </div>
@@ -577,7 +589,7 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
 
 /* ---------- one-line summaries of each settings section ---------- */
 
-export type Section = "pauses" | "look" | "framing" | "export";
+export type Section = "pauses" | "look" | "framing" | "export" | "post";
 
 export function summary(ed: Ed, sec: Section): string {
   const s = ed.short;
@@ -598,6 +610,10 @@ export function summary(ed: Ed, sec: Section): string {
     const cams = (ed.cameras?.cameras ?? []).filter((c) => c.count >= 2);
     const manual = cams.filter((c) => c.manual).length;
     return `Zoom ${s.zoom.toFixed(2)}× · ${cams.length} camera${cams.length === 1 ? "" : "s"}${manual ? `, ${manual} set by hand` : ""}`;
+  }
+  if (sec === "post") {
+    if (s.published?.youtube) return "Posted to YouTube";
+    return !s.rendered ? "Render first" : s.post?.title ? "Text ready" : "Ready to post";
   }
   return (s.speed ?? 1) === 1 ? "Normal speed" : `${(s.speed ?? 1).toFixed(2)}× speed`;
 }

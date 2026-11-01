@@ -18,7 +18,7 @@ from shorts.transcribe import load_words, words_path
 from shorts.util import encode_args
 
 from . import store
-from .transcript_edit import replace_word, splice
+from .transcript_edit import add_missing, replace_word, splice
 
 PEAKS_PER_SEC = 20
 BROWSER_CODECS = {"h264", "vp8", "vp9", "av1"}
@@ -169,7 +169,62 @@ def framing_track(lid: str) -> list[list[float]] | None:
         else:
             fx, fy = 0.5, 0.4
         out.append([t, round(fx, 4), round(fy, 4), cid, cam.get("zoom")])
-    return out
+    # samples are seconds apart: switch angles where the picture actually cuts,
+    # not halfway between two samples (which framed one angle as the other)
+    cuts = _cut_times(lid, [(a[0], b[0], a[3]) for a, b in zip(out, out[1:]) if a[3] != b[3]])
+    full = []
+    for a, b in zip(out, out[1:] + [None]):
+        full.append(a)
+        if b is not None and a[3] != b[3]:
+            # not searched yet: most cuts are at the later sample (a keyframe)
+            tc = cuts.get(f"{a[0]}-{b[0]}", b[0])
+            tc = a[0] + 0.1 if tc is None else tc  # never on the earlier angle: it cut right away
+            if tc - 0.02 > a[0]:
+                full.append([round(tc - 0.02, 3), *a[1:]])
+            if tc < b[0]:
+                full.append([round(tc, 3), *b[1:]])
+    return full
+
+
+_cutting: set[str] = set()
+
+
+def _cut_times(lid: str, pairs: list[tuple[float, float, int]]) -> dict[str, float | None]:
+    """Where the picture switches between two samples of different angles: the
+    frame after the last one the render's own angle finder still puts on the
+    earlier angle. Found in the background (a few seconds per hour of video)
+    and cached per pair of samples; until then the preview switches halfway."""
+    cache = store.lecture_dir(lid) / "cuts.json"
+    known = json.loads(cache.read_text()) if cache.exists() else {}
+    todo = [(a, b, c) for a, b, c in pairs if f"{a}-{b}" not in known]
+    if todo and lid not in _cutting:
+        _cutting.add(lid)
+        threading.Thread(target=_find_cuts, args=(lid, todo, known, cache), daemon=True).start()
+    return known
+
+
+def _find_cuts(lid: str, todo, known: dict, cache: Path) -> None:
+    from shorts.cameras import GEO_W, locator
+
+    try:
+        loc = locator(cameras(lid))
+        if loc is None:
+            return
+        meta = store.get_lecture(lid)
+        w, h = GEO_W, round(GEO_W * meta["height"] / meta["width"]) // 2 * 2
+        src = str(store.source_path(lid))
+        for a, b, c0 in todo:
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{a:.3f}", "-t", f"{b - a + 0.05:.3f}", "-i", src,
+                                  "-an", "-vf", f"fps=10,scale={w}:{h}", "-pix_fmt", "bgr24", "-f", "rawvideo", "-"],
+                                 capture_output=True).stdout
+            frames = np.frombuffer(raw, np.uint8)[: len(raw) // (w * h * 3) * w * h * 3].reshape(-1, h, w, 3)
+            # cuts are mostly at the later sample (a keyframe), so look back from there
+            k = next((k for k in range(len(frames) - 1, -1, -1)
+                      if (found := loc.locate(frames[k])) and found[0]["id"] == c0), None)
+            known[f"{a}-{b}"] = None if k is None else round(min(b, a + (k + 1) / 10), 2)
+        cache.write_text(json.dumps(known))
+    finally:
+        _cutting.discard(lid)
 
 
 def speaker_track(lid: str) -> list[list[float]]:
@@ -273,6 +328,16 @@ def edit_word(lid: str, i: int, text: str | None) -> dict:
     if data is None:
         raise KeyError("transcript")
     replace_word(data, i, text)
+    words_path(store.source_path(lid)).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
+def missing_word(lid: str, i: int, add: bool) -> dict:
+    """Add or turn down the hadith words suggested after word i."""
+    data = transcript(lid)
+    if data is None:
+        raise KeyError("transcript")
+    add_missing(data, i, add)
     words_path(store.source_path(lid)).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return data
 

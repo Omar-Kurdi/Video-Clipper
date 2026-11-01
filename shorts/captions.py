@@ -38,7 +38,7 @@ class TextStyle:
     outline: int = 0
     outline_color: str = "#000000"
     shadow: int = 0                 # blur radius of a soft drop shadow
-    y: float = 0.62                 # vertical centre, fraction of frame height
+    y: float = 0.52                 # vertical centre, fraction of frame height (above every app's bottom bar)
     max_words: int = 3
     max_chars: int = 22
     fade_ms: int = 90
@@ -54,18 +54,18 @@ PRESETS: dict[str, Style] = {
     # dark translucent box, like the reference short
     "box": Style(TextStyle(),
                  TextStyle(size=44, color="#FFD54A", box_opacity=0.55, radius=10,
-                           pad_x=22, pad_y=10, y=0.695)),
+                           pad_x=22, pad_y=10, y=0.60)),
     # rounded pill, spoken word highlighted
     "pill": Style(TextStyle(radius=40, box_opacity=0.72, pad_x=40, pad_y=18, highlight="#FFD54A"),
                   TextStyle(size=42, color="#111111", box_color="#FFD54A", box_opacity=1.0,
-                            radius=30, pad_x=28, pad_y=10, y=0.70)),
+                            radius=30, pad_x=28, pad_y=10, y=0.60)),
     # no box, thick outline (classic shorts look)
     "outline": Style(TextStyle(size=76, box=False, outline=7, shadow=6, highlight="#FFD54A",
                                max_words=2, max_chars=16),
-                     TextStyle(size=44, color="#FFD54A", box=False, outline=5, y=0.70)),
+                     TextStyle(size=44, color="#FFD54A", box=False, outline=5, y=0.60)),
     # quiet: soft shadow only
     "minimal": Style(TextStyle(size=60, box=False, shadow=10),
-                     TextStyle(size=40, color="#E8E8E8", box=False, shadow=8, y=0.70)),
+                     TextStyle(size=40, color="#E8E8E8", box=False, shadow=8, y=0.60)),
 }
 
 
@@ -189,7 +189,7 @@ def _ink_extent(pattern: str, size: int, rtl: bool, marks: bool = False) -> tupl
 
 
 def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
-                max_width: int = 980) -> np.ndarray:
+                max_width: int = 800) -> np.ndarray:
     """RGBA image of one caption line. Words are laid out right-to-left for
     RTL scripts, so punctuation stays at the end of the sentence."""
     rtl = _is_rtl(" ".join(words))

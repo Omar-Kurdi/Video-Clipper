@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from server.transcript_edit import replace_word, splice  # noqa: E402
+from server.transcript_edit import add_missing, replace_word, splice  # noqa: E402
 
 failures: list[str] = []
 
@@ -68,6 +68,27 @@ d = sample()
 d["sources"] = [{"type": "quran", "w0": 1, "w1": 3}]
 splice(d, 0, 1, 3, [{"w": "q", "s": 1.0, "e": 2.8}])
 check("span clipped to the new words", d["sources"] == [{"type": "quran", "w0": 1, "w1": 2}], d["sources"])
+
+# a suggested hadith word: added in the pause after its word, or turned down for good
+d = sample()
+d["words"][3]["missing"] = "له"
+add_missing(d, 3, True)
+ws = d["words"]
+check("word added after", [x["w"] for x in ws[3:6]] == ["d", "له", "e"], [x["w"] for x in ws])
+check("in the pause, keeping its word's time", (ws[3]["e"], ws[4]["s"]) == (3.8, 3.8) and ws[4]["e"] <= ws[5]["s"], ws[3:5])
+check("sentence and hadith grow", d["segments"][1]["w1"] == 7 and d["sources"][0]["w1"] == 7, (d["segments"], d["sources"]))
+check("suggestion gone, sentence marked edited", "missing" not in ws[3] and d["segments"][1].get("edited"), ws[3])
+d = sample()
+d["words"][2]["missing"] = "له"  # last word of a sentence, 0.2 s before the next: no room, shares its time
+d["words"][3]["s"] = 2.85
+add_missing(d, 2, True)
+ws = d["words"]
+check("no pause: shares the end of its word", ws[3]["w"] == "له" and ws[2]["e"] == ws[3]["s"] and ws[3]["e"] == 2.8, ws[2:4])
+check("it joins that word's sentence", d["segments"][0]["w1"] == 4, d["segments"])
+d = sample()
+d["words"][3]["missing"] = "له"
+add_missing(d, 3, False)
+check("turned down: remembered, nothing added", len(d["words"]) == 6 and d["words"][3].get("missing_no") == "له", d["words"][3])
 
 print(f"\n{len(failures)} failed" if failures else "\nall passed")
 sys.exit(1 if failures else 0)

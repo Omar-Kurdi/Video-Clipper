@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, type Moment, type Range, type Word } from "./api";
 import { Confirm } from "./Confirm";
 import { TopBar, type Ed } from "./Editor";
-import { CaptionsPanel, ClipStrip, ExportPanel, FramingPanel, PausesPanel, Preview, Stats, cropWidth, sortedCameras, summary, type Section } from "./panels";
+import { CaptionsPanel, ClipStrip, ExportPanel, FramingPanel, PausesPanel, PostPanel, Preview, Stats, cropWidth, sortedCameras, summary, type Section } from "./panels";
 import { VolumeControl } from "./Volume";
 import { SpeedPicker, at, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
 import { clamp, fmt, normalize } from "./util";
 
-const SECTIONS: Section[] = ["pauses", "look", "framing", "export"];
-const SECTION_NAME: Record<Section, string> = { pauses: "Pauses", look: "Captions & look", framing: "Framing", export: "Export" };
+const SECTIONS: Section[] = ["pauses", "look", "framing", "export", "post"];
+const SECTION_NAME: Record<Section, string> = { pauses: "Pauses", look: "Captions & look", framing: "Framing", export: "Export", post: "Post" };
 const SECTION_KEY = "settings-section";
 
 function storedSection(): Section | null {
@@ -49,6 +49,14 @@ export function Workspace({ ed }: { ed: Ed }) {
     setOpenState(v);
     try { localStorage.setItem(SECTION_KEY, v ?? ""); } catch { /* storage unavailable */ }
   };
+  // a render just finished: show what to post it with
+  const renderedAt = ed.short?.last_render?.at;
+  const seenRender = useRef({ id: ed.short?.id, at: renderedAt });
+  useEffect(() => {
+    const seen = seenRender.current;
+    if (renderedAt && seen.id === ed.short?.id && renderedAt !== seen.at) setOpen("post");
+    seenRender.current = { id: ed.short?.id, at: renderedAt };
+  }, [renderedAt, ed.short?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const previewWidth = usePreviewWidth();
   const [rate, setRate] = useState(1);
   useEffect(() => { if (video.current) { video.current.playbackRate = rate; video.current.preservesPitch = true; } }, [rate]);
@@ -280,6 +288,7 @@ export function Workspace({ ed }: { ed: Ed }) {
                   {sec === "look" && <CaptionsPanel ed={ed} />}
                   {sec === "framing" && <FramingPanel ed={ed} />}
                   {sec === "export" && <ExportPanel ed={ed} />}
+                  {sec === "post" && <PostPanel ed={ed} />}
                 </div>
               </section>
             ))}
@@ -373,7 +382,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
   const onMouseUp = (e: React.MouseEvent) => {
     if (!tr || editing != null) return;
     const target = e.target as HTMLElement;
-    if (target.closest(".ts, .para-tools, .seg-edit, .word-fix")) return;
+    if (target.closest(".ts, .para-tools, .seg-edit, .word-fix, .miss")) return;
     const sx = window.getSelection();
     if (sx && !sx.isCollapsed && sx.rangeCount) {
       const inside = [...(article.current?.querySelectorAll("[data-i]") ?? [])].filter((el) => sx.containsNode(el, true));
@@ -470,6 +479,13 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
           : showDoubt && w.flag === "gemini" ? `Changed by Gemini (${w.why ?? "proofreading"}); was ${(w.alts ?? [])[0] ?? "?"}`
           : undefined;
         parts.push(<span key={i} data-i={i} className={(fixing === i ? `${cls} fixing` : cls) || undefined} title={fixing === i ? undefined : tip}>{w.w}</span>);
+        if (w.missing) {
+          parts.push(" ", <span key={`m${i}`} className="miss" onMouseUp={(e) => e.stopPropagation()}>
+            <button type="button" dir="rtl" onClick={() => ed.missingWord(i, true)}
+              title="In the hadith here, but the recognisers didn't hear it (quick words like this are often dropped). Click if he said it.">+ {w.missing}</button>
+            <button type="button" className="miss-no" aria-label={`He didn't say ${w.missing}`} title="He didn't say it" onClick={() => ed.missingWord(i, false)}>×</button>
+          </span>);
+        }
 
       }
       const whole = sel && segRange(k)[0] >= sel[0] - 0.01 && segRange(k)[1] <= sel[1] + 0.01;
@@ -624,6 +640,19 @@ function WordFix({ word, onPick, onClose }: { word: Word; onPick: (text: string 
 
 function SourceBadge({ src }: { src: import("./api").Source }) {
   const [open, setOpen] = useState(false);
+  // open the card towards the side of the transcript that has room for it
+  const [pos, setPos] = useState<CSSProperties>({});
+  const toggle = (e: { currentTarget: HTMLButtonElement }) => {
+    if (!open) {
+      const r = e.currentTarget.getBoundingClientRect();
+      const box = e.currentTarget.closest(".transcript-panel")?.getBoundingClientRect();
+      const left = box?.left ?? 0, right = box?.right ?? window.innerWidth;
+      const w = Math.min(340, right - left - 16);
+      const x = Math.min(Math.max(left + 8, r.left), right - 8 - w) - r.left;
+      setPos({ width: w, insetInlineStart: x });  // the badge is dir="ltr": inline start is its left
+    }
+    setOpen(!open);
+  };
   if (src.type === "quran") {
     const where = src.ref?.startsWith("~");
     const title = where ? `Quran: these words appear in ${src.places ?? "several"} places, so no surah/ayah is shown`
@@ -638,11 +667,11 @@ function SourceBadge({ src }: { src: import("./api").Source }) {
   }
   return (
     <span className="src-badge hadith" dir="ltr" onMouseUp={(e) => e.stopPropagation()}>
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button type="button" onClick={toggle} aria-expanded={open}>
         Hadith{src.ref ? ` · ${src.ref}` : " · source not found"}{src.grade ? ` · ${src.grade}` : ""}
       </button>
       {open && (
-        <span className="src-pop" dir="auto">
+        <span className="src-pop" dir="auto" style={pos}>
           {src.text ? <span className="src-ar" dir="rtl" lang="ar">{src.text.length > 600 ? src.text.slice(0, 600) + "…" : src.text}</span>
             : <span>This sounds like a hadith (it follows a phrase like «قال رسول الله ﷺ»), but it wasn't found in the six books.</span>}
           {src.english && <span className="src-en">{src.english.length > 400 ? src.english.slice(0, 400) + "…" : src.english}</span>}

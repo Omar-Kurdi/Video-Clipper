@@ -331,6 +331,20 @@ def edit_transcript_word(lid: str, i: int, body: WordEditIn):
         raise HTTPException(400, str(e))
 
 
+class MissingIn(BaseModel):
+    add: bool  # false: the speaker didn't say it, don't suggest it again
+
+
+@app.post("/api/lectures/{lid}/transcript/words/{i}/missing")
+def transcript_missing_word(lid: str, i: int, body: MissingIn):
+    try:
+        return media.missing_word(lid, i, body.add)
+    except IndexError:
+        raise HTTPException(404, "no such word")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/lectures/{lid}/transcribe")
 def lecture_transcribe(lid: str, engine: str = "tashkeel"):
     meta = store.get_lecture(lid)

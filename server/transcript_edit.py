@@ -61,3 +61,32 @@ def replace_word(data: dict, i: int, text: str | None) -> dict:
     seg["edited"] = True
     splice(data, k, i, i + 1, new)
     return data
+
+
+def add_missing(data: dict, i: int, add: bool) -> dict:
+    """Add (or turn down) the hadith words suggested after word i (see
+    sources.hadith_gaps). Added words go in the pause after it when there is
+    room, else they share the end of its time."""
+    k = segment_of(data, i)
+    seg, words = data["segments"][k], data["words"]
+    w = words[i]
+    text = w.pop("missing", None)
+    if not text:
+        raise ValueError("nothing is suggested after this word")
+    if not add:
+        w["missing_no"] = text
+        return data
+    tokens = text.split()
+    nxt = words[i + 1]["s"] if i + 1 < len(words) else w["e"] + 0.3 * len(tokens)
+    room = min(nxt - w["e"], 0.3 * len(tokens))
+    seg.setdefault("orig", [dict(x) for x in words[seg["w0"]:seg["w1"]]])
+    seg["edited"] = True
+    if room >= 0.1 * len(tokens):
+        s, step = w["e"], room / len(tokens)
+    else:  # no pause: the last third of the word's time
+        s = w["e"] - (w["e"] - w["s"]) / 3
+        step = (w["e"] - s) / len(tokens)
+        w["e"] = round(s, 3)
+    new = [{"w": tok, "s": round(s + n * step, 3), "e": round(s + (n + 1) * step, 3)} for n, tok in enumerate(tokens)]
+    splice(data, k, i + 1, i + 1, new)
+    return data

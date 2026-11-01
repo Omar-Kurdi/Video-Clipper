@@ -108,6 +108,7 @@ export interface Word {
   alts?: string[];  // what the other recognisers heard (or, for "voted"/"gemini", the original reading)
   why?: string;
   checked?: string;  // a doubtful word Gemini confirmed
+  missing?: string;  // hadith words not heard after this one: offered to add
 }
 export interface Source {
   type: "quran" | "hadith";
@@ -201,6 +202,8 @@ export const api = {
   moments: (id: string) => req<{ moments: Moment[] | null }>(`/api/lectures/${id}/moments`),
   suggestMoments: (id: string) => req<{ moments: Moment[] }>(`/api/lectures/${id}/moments`, { method: "POST" }),
   /** settle a doubtful word: another reading (may be several words, or "" to remove it), or null to keep it */
+  missingWord: (id: string, i: number, add: boolean) =>
+    req<Transcript>(`/api/lectures/${id}/transcript/words/${i}/missing`, json({ add })),
   editWord: (id: string, i: number, text: string | null) =>
     req<Transcript>(`/api/lectures/${id}/transcript/words/${i}`, json({ text }, "PUT")),
   translation: (id: string, lang: string) => req<Translation>(`/api/lectures/${id}/translation/${lang}`),
