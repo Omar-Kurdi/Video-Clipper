@@ -550,9 +550,10 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
               <span>Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>
               <progress max={1} value={ed.transcribeJob.progress} />
             </div>
-          ) : (
-            <button type="button" className="btn primary" onClick={() => ed.transcribe()}>Transcribe video</button>
-          )}
+          ) : (<>
+            {ed.transcribeError && <p className="small err-text" role="alert">Transcription stopped. {ed.transcribeError}</p>}
+            <button type="button" className="btn primary" onClick={() => ed.transcribe()}>{ed.transcribeError ? "Try again" : "Transcribe video"}</button>
+          </>)}
           <p className="muted small">You can already pick moments on the timeline; captions for your clips are transcribed when you render.</p>
         </div>
       ) : (

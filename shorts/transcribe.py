@@ -8,11 +8,11 @@ from .util import default_device, fmt_time
 
 
 @lru_cache(maxsize=1)
-def _model(model: str, device: str):
+def _model(model: str, device: str, compute: str | None = None):
     """Loaded once per process (the web server reuses it between jobs)."""
     from faster_whisper import WhisperModel
 
-    return WhisperModel(model, device=device, compute_type="float16" if device == "cuda" else "int8")
+    return WhisperModel(model, device=device, compute_type=compute or ("float16" if device == "cuda" else "int8"))
 
 
 def words_path(video: Path) -> Path:
@@ -81,6 +81,25 @@ def release_whisper() -> None:
 ENGINES = ("tashkeel", "whisper")
 
 
+def _whisper_pass(video: Path, m, language: str | None, on_progress, share: float):
+    # (a hint via hotwords/initial_prompt helps Whisper's spelling of names but
+    # squashes its word timings over a whole lecture, so it isn't used here)
+    segments, info = m.transcribe(
+        str(video), language=language, word_timestamps=True, vad_filter=True,
+        condition_on_previous_text=False)
+    words, lines, segs = [], [], []
+    for seg in segments:
+        lines.append(f"[{fmt_time(seg.start)} - {fmt_time(seg.end)}] {seg.text.strip()}")
+        print(lines[-1], flush=True)
+        first = len(words)
+        for w in seg.words or []:
+            words.append({"w": w.word.strip(), "s": round(w.start, 3), "e": round(w.end, 3)})
+        segs.append({"s": round(seg.start, 3), "e": round(seg.end, 3), "w0": first, "w1": len(words)})
+        if on_progress and info.duration:
+            on_progress(share * min(1.0, seg.end / info.duration))
+    return words, lines, segs, info
+
+
 def transcribe(video: Path, model: str = "large-v3", language: str | None = "ar",
                device: str | None = None, on_progress: Callable[[float], None] | None = None,
                engine: str = "tashkeel", title: str | None = None) -> Path:
@@ -92,23 +111,17 @@ def transcribe(video: Path, model: str = "large-v3", language: str | None = "ar"
     device = device or default_device()
     tashkeel = engine == "tashkeel" and (language or "ar") == "ar" and device == "cuda"
     share = 0.55 if tashkeel else 0.95
-    m = _model(model, device)
-    # (a hint via hotwords/initial_prompt helps Whisper's spelling of names but
-    # squashes its word timings over a whole lecture, so it isn't used here)
-    segments, info = m.transcribe(
-        str(video), language=language, word_timestamps=True, vad_filter=True,
-        condition_on_previous_text=False)
-
-    words, lines, segs = [], [], []
-    for seg in segments:
-        lines.append(f"[{fmt_time(seg.start)} - {fmt_time(seg.end)}] {seg.text.strip()}")
-        print(lines[-1], flush=True)
-        first = len(words)
-        for w in seg.words or []:
-            words.append({"w": w.word.strip(), "s": round(w.start, 3), "e": round(w.end, 3)})
-        segs.append({"s": round(seg.start, 3), "e": round(seg.end, 3), "w0": first, "w1": len(words)})
-        if on_progress and info.duration:
-            on_progress(share * min(1.0, seg.end / info.duration))
+    # when other programs fill the GPU, retry in 8-bit: about half the memory, nearly the same text
+    for compute in ([None, "int8_float16"] if device == "cuda" else [None]):
+        try:
+            words, lines, segs, info = _whisper_pass(video, _model(model, device, compute), language,
+                                                     on_progress, share)
+            break
+        except RuntimeError as e:
+            if "out of memory" not in str(e) or compute:
+                raise
+            print("GPU out of memory: Whisper again in 8-bit", flush=True)
+            release_whisper()
 
     segs = split_long(words, segs)
     data = {"language": info.language, "engine": "whisper", "words": words, "segments": segs, "title": title}

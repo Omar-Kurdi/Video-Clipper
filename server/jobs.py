@@ -76,4 +76,9 @@ class Jobs:
                 self._set(jid, status="done", progress=1.0, result=result, finished=time.time())
             except Exception as e:  # surfaced to the UI
                 traceback.print_exc()
-                self._set(jid, status="error", message=f"{type(e).__name__}: {e}", finished=time.time())
+                msg = f"{type(e).__name__}: {e}"
+                if "out of memory" in str(e).lower():
+                    from shorts.util import gpu_full_message
+
+                    msg = gpu_full_message()
+                self._set(jid, status="error", message=msg, finished=time.time())

@@ -38,6 +38,7 @@ export interface Ed {
   render: () => Promise<void>;
   transcribe: (engine?: string) => Promise<void>;
   transcribeJob: Job | null;
+  transcribeError: string | null;  // why the last transcription stopped, if it failed
   /** the other language: English for an Arabic lecture, Arabic for an English one */
   translationLang: string;
   translation: Translation | null;
@@ -228,6 +229,10 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       },
       transcribe: async (engine = "tashkeel") => { await api.transcribe(lectureId, engine).catch((e) => setError(e.message)); pollJobs(); },
       transcribeJob: jobs.find((j) => j.kind === "transcribe" && (j.status === "queued" || j.status === "running")) ?? null,
+      transcribeError: (() => {
+        const last = jobs.filter((j) => j.kind === "transcribe").sort((a, b) => b.created - a.created)[0];
+        return last?.status === "error" ? last.message : null;
+      })(),
       translationLang, translation,
       gemini,
       proofread: async () => { await api.proofread(lectureId).catch((e) => setError(e.message)); pollJobs(); },

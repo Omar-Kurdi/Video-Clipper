@@ -1,5 +1,6 @@
 """Small helpers: time parsing, ffprobe, subprocess."""
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
@@ -64,6 +65,33 @@ def default_device() -> str:
         return "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
     except Exception:
         return "cpu"
+
+
+def gpu_full_message() -> str:
+    """Why a GPU job ran out of memory, naming the other programs holding it."""
+    try:
+        used, total = (int(x) for x in subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10).stdout.split("\n")[0].split(","))
+        apps = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"],
+                              capture_output=True, text=True, timeout=10).stdout.splitlines()
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return "The GPU ran out of memory. Close other programs using it and try again."
+    others = []
+    for line in apps:
+        pid, mb = (x.strip() for x in line.split(","))
+        if int(pid) == os.getpid() or int(mb) < 300:
+            continue
+        try:  # "haruna", or for a Python server the folder it runs in: "Python (asr-service)"
+            name = Path(Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[0].decode(errors="replace")).name
+            if name.startswith("python"):
+                name = f"Python ({Path(os.readlink(f'/proc/{pid}/cwd')).name})"
+        except OSError:
+            name = f"process {pid}"
+        others.append((int(mb), name))
+    names = "; ".join(f"{n} ({mb / 1024:.1f} GB)" for mb, n in sorted(others, reverse=True)[:4])
+    return (f"The GPU ran out of memory ({used / 1024:.1f} of {total / 1024:.1f} GB in use)."
+            + (f" Also using it: {names}." if names else "") + " Close some of these and try again.")
 
 
 @lru_cache(maxsize=1)
