@@ -280,6 +280,7 @@ function PostYoutube({ ed }: { ed: Ed }) {
             </select></label>
           <label className="field"><span className="small muted">Publish at (optional)</span>
             <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></label>
+          {when && <p className="small muted">Scheduled videos stay private until that time, then YouTube makes them public. Clear the time to pick another visibility. <button type="button" className="link small" onClick={() => setWhen("")}>Clear time</button></p>}
           <button type="button" className="btn small primary" disabled={!s.rendered || !!running} onClick={post}
             title={!s.rendered ? "Render the short first" : undefined}>
             {running ? `Uploading… ${Math.round((job!.progress ?? 0) * 100)}%` : when ? "Schedule on YouTube" : "Post to YouTube"}

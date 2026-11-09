@@ -98,12 +98,14 @@ TAG_FADE = 0.25
 
 
 def map_words(words: list[dict], segs: list[Segment], fps: Fraction, d: int) -> list[Word]:
-    """Each word goes to the segment it overlaps most, clipped to that segment."""
+    """Each word goes to the segment it overlaps most, clipped to that segment.
+    A word less than half inside every segment is left out: one that ends right
+    where a clip starts only touches it after the cut is rounded to a frame."""
     starts = output_starts(segs, d)
     bounds = [(float(s.f0 / fps), float(s.f1 / fps)) for s in segs]
     out = []
     for w in words:
-        best, best_ov = None, 0.0
+        best, best_ov = None, (w["e"] - w["s"]) / 2
         for i, (a, b) in enumerate(bounds):
             ov = min(b, w["e"]) - max(a, w["s"])
             if ov > best_ov:
