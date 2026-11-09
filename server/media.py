@@ -2,6 +2,7 @@
 import json
 import re
 import subprocess
+import sys
 import threading
 from functools import lru_cache
 from dataclasses import replace
@@ -41,13 +42,21 @@ def ffprobe(path: Path) -> dict:
 
 # ---------- import ----------
 
+# the app's own yt-dlp, not whichever is first on PATH (a system Python upgrade can break that one)
+YT_DLP = [sys.executable, "-m", "yt_dlp"]
+
+
 def download(url: str, lid: str, report) -> dict:
     d = store.lecture_dir(lid)
-    title = subprocess.run(["yt-dlp", "--no-playlist", "--print", "%(title)s", "--skip-download", url],
-                           capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
+    r = subprocess.run([*YT_DLP, "--no-playlist", "--print", "%(title)s", "--skip-download", url],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        why = [l for l in r.stderr.splitlines() if l.startswith("ERROR")] or r.stderr.strip().splitlines()[-1:]
+        raise RuntimeError(f"yt-dlp: {why[-1] if why else 'failed'}")
+    title = r.stdout.strip().splitlines()[-1]
     store.update_lecture(lid, title=title)
     proc = subprocess.Popen(
-        ["yt-dlp", "--no-playlist", "--newline", "-f",
+        [*YT_DLP, "--no-playlist", "--newline", "-f",
          "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*[height<=1080]+ba/b",
          "--merge-output-format", "mp4", "-o", str(d / "source.%(ext)s"), url],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
