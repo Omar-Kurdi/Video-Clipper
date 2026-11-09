@@ -36,6 +36,7 @@ with the Tashkeel model alone. See [Credits](#credits) for every model.
 
 ```bash
 ./install.sh   # once: .venv, Python packages, web build (re-run after pulling updates)
+               # PYTHON=python3.14 ./install.sh picks the Python version; the .venv stays on it
 ./start.sh     # runs in the background, prints the address (8000, or the next free port)
 ./stop.sh      # stops it
 ```

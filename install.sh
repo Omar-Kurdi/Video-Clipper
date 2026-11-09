@@ -4,15 +4,20 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 need() { command -v "$1" >/dev/null || { echo "Missing: $1 — $2" >&2; exit 1; }; }
-need python3 "install Python 3.10+"
+PY="${PYTHON:-python3}"   # e.g. PYTHON=python3.14 ./install.sh
+need "$PY"   "install Python 3.10+"
 need ffmpeg  "install ffmpeg (with NVENC support for GPU encoding)"
 need node    "install Node.js 18+"
 need npm     "install npm"
 
-if [ ! -d .venv ]; then
-  echo "==> Creating Python environment (.venv)"
+# the versioned interpreter (python3.14, not python3), so a system Python
+# upgrade doesn't silently move the environment to a version without its packages
+PYV=$("$PY" -c 'import sys; print("python%d.%d" % sys.version_info[:2])')
+PY=$(command -v "$PYV" || command -v "$PY")
+if [ ! -x .venv/bin/python ] || [ "$(.venv/bin/python -c 'import sys; print("python%d.%d" % sys.version_info[:2])' 2>/dev/null)" != "$PYV" ]; then
+  echo "==> Creating Python environment (.venv) with $PYV"
   # reuse packages already installed on the system (e.g. CUDA libraries)
-  python3 -m venv --system-site-packages .venv
+  "$PY" -m venv --clear --system-site-packages .venv
 fi
 
 echo "==> Installing Python packages"
