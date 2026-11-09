@@ -128,6 +128,7 @@ export interface Transcript {
   segments: { s: number; e: number; w0: number; w1: number; edited?: boolean }[];
   sources?: Source[];
   engine?: "whisper" | "tashkeel";
+  proofread?: { model: string | null; changed: number };  // set once Gemini has proofread it
 }
 
 export interface Translation {

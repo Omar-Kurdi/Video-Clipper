@@ -754,6 +754,7 @@ function TranscriptInfo({ ed }: { ed: Ed }) {
   const q = (tr.sources ?? []).filter((s) => s.type === "quran").length;
   const h = (tr.sources ?? []).filter((s) => s.type === "hadith").length;
   const arabic = (tr.language ?? ed.lecture.language) === "ar";
+  const left = tr.words.filter((w) => w.flag === "doubt" || w.flag === "voted").length;
   const [upgrading, setUpgrading] = useState(false);
   return (
     <div className="tr-info">
@@ -771,10 +772,11 @@ function TranscriptInfo({ ed }: { ed: Ed }) {
         </Confirm>
       )}
       {ed.transcribeJob && <span className="small">Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>}
-      {ed.gemini && !ed.transcribeJob && tr.words.some((w) => w.flag === "doubt" || w.flag === "voted") && (
+      {tr.proofread && !ed.proofreadJob && <span className="muted small">· Proofread by Gemini, {tr.proofread.changed} word{tr.proofread.changed === 1 ? "" : "s"} changed</span>}
+      {ed.gemini && !ed.transcribeJob && left > 0 && (
         ed.proofreadJob ? <span className="small">Gemini is proofreading…</span> : (
           <button type="button" className="btn small" title="Send the audio and the transcript to Gemini (Google), which checks only the underlined words. On Google's free tier, what you send may be used to improve Google's products."
-            onClick={() => ed.proofread()}>Proofread doubtful words with Gemini</button>
+            onClick={() => ed.proofread()}>{tr.proofread ? `Proofread the ${left} doubtful word${left === 1 ? "" : "s"} left` : "Proofread doubtful words with Gemini"}</button>
         ))}
       {ed.proofreadFailed && !ed.proofreadJob && <span className="small err-text" title={ed.proofreadFailed.message}>Gemini: {ed.proofreadFailed.message.slice(0, 80)}</span>}
       <span className="tr-translate">

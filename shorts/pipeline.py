@@ -74,6 +74,12 @@ def caption_words(words: list[dict], harakat: str) -> list[dict]:
     return [w if (harakat == "quran" and w.get("quran")) else {**w, "w": strip.sub("", w["w"])} for w in words]
 
 
+def in_ranges(words: list[dict], ranges) -> list[dict]:
+    """The words whose middle is inside a chosen range. The cut pads each range
+    a little, and a word just before the range would otherwise get a caption."""
+    return [w for w in words if any(a <= (w["s"] + w["e"]) / 2 < b for a, b in ranges)]
+
+
 def translated_words(video: Path, lang: str) -> list[dict]:
     """Caption words from a saved translation of the full transcript."""
     from .translate import load, timed_words
@@ -189,7 +195,7 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
             if o.quran_tag and o.captions else []  # the tag belongs with the captions
         if o.captions or o.title or tags:
             style = resolve_style(o)
-            chunks = chunk(map_words(caption_words(words, o.harakat), segs, fps, d), style.captions) if o.captions else []
+            chunks = chunk(map_words(caption_words(in_ranges(words, o.ranges), o.harakat), segs, fps, d), style.captions) if o.captions else []
             overlay = Overlay(chunks, style, o.title, tags)
 
         cb = _stage(progress, "render")
