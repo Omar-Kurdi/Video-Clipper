@@ -4,6 +4,7 @@ Silence comes from Silero VAD on the actual audio, not from Whisper word
 timings (Whisper often stretches a word across a pause).
 """
 import math
+from functools import lru_cache
 import subprocess
 from dataclasses import dataclass
 from fractions import Fraction
@@ -33,6 +34,7 @@ class Segment:
         return self.f1 - self.f0
 
 
+@lru_cache(maxsize=8)  # fitting a short plans the same audio several times
 def _range_audio(video: Path, start: float, dur: float) -> np.ndarray:
     raw = subprocess.run(
         ["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", str(video),

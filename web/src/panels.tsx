@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Camera, type Post, type Range, type StyleData, type TextStyle } from "./api";
-import type { Ed } from "./Editor";
+import { api, type Camera, type Caption, type CaptionEdits, type Post, type Range, type StyleData, type TextStyle } from "./api";
+import { exportSpeed, finalLength, type Ed } from "./Editor";
 import { QuickPlayer } from "./Quick";
 import { rememberVolume } from "./Volume";
 import { fmt, parseTime, useDebounced } from "./util";
@@ -49,7 +49,7 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
   const setGuide = (g: Guide) => { setGuideState(g); try { localStorage.setItem(GUIDE_KEY, g); } catch { /* storage unavailable */ } };
   const key = useDebounced(JSON.stringify({ t: Math.round(t * 4) / 4, style: s?.style, style_data: s?.style_data,
     title: s?.title, zoom: s?.zoom, captions: s?.captions, harakat: s?.harakat, caption_lang: s?.caption_lang, quran_tag: s?.quran_tag,
-    tr: ed.translation ? 1 : 0 }), 350);
+    caption_lang2: s?.caption_lang2 ?? null, tr: ed.translation ? 1 : 0 }), 350);
 
   const sid = s?.id;
   useEffect(() => { setTab(pick()); }, [sid, ed.renderedVersion, s?.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -106,7 +106,7 @@ export function Stats({ ed }: { ed: Ed }) {
   return (
     <div className="stats">
       <div><b>{e ? fmt(e.selected, 0) : "0:00"}</b><span>selected</span></div>
-      <div><b className="good">{e ? fmt(e.duration / (ed.short?.speed ?? 1), 0) : "0:00"}</b><span>{(ed.short?.speed ?? 1) !== 1 ? `exported at ${ed.short?.speed}×` : "after cuts"}</span></div>
+      <div><b className="good">{e ? fmt(finalLength(ed), 0) : "0:00"}</b><span>{exportSpeed(ed) !== 1 ? `exported at ${exportSpeed(ed).toFixed(2)}×` : "after cuts"}</span></div>
       <div><b>{e ? e.cuts : 0}</b><span>pause cuts</span></div>
     </div>
   );
@@ -217,12 +217,47 @@ export function ExportPanel({ ed }: { ed: Ed }) {
   if (!s) return null;
   return (
     <div className="panel">
-      <div className="row"><label htmlFor="xspeed">Export speed</label><span className="val">{(s.speed ?? 1).toFixed(2)}×</span></div>
-      <input id="xspeed" type="range" min={0.75} max={2} step={0.05} value={s.speed ?? 1} onChange={(e) => ed.update({ speed: +e.target.value })} />
-      <Help more={<>To only <i>watch</i> faster, use the speed buttons on the players instead.</>}>
-        Speeds up the exported video; the voice keeps its pitch.
-      </Help>
+      <label className="check"><input type="checkbox" checked={!!s.fit_to}
+        onChange={(e) => ed.update({ fit_to: e.target.checked ? 60 : null })} />Fit into a length</label>
+      {s.fit_to ? (
+        <>
+          <div className="row">
+            <label htmlFor="xfit">Length</label>
+            <span className="val">{fmt(s.fit_to, 0)}</span>
+          </div>
+          <input id="xfit" type="range" min={15} max={180} step={5} value={s.fit_to} onChange={(e) => ed.update({ fit_to: +e.target.value })} />
+          <FitResult ed={ed} />
+        </>
+      ) : (
+        <>
+          <div className="row"><label htmlFor="xspeed">Export speed</label><span className="val">{(s.speed ?? 1).toFixed(2)}×</span></div>
+          <input id="xspeed" type="range" min={0.75} max={2} step={0.05} value={s.speed ?? 1} onChange={(e) => ed.update({ speed: +e.target.value })} />
+          <Help more={<>To only <i>watch</i> faster, use the speed buttons on the players instead.</>}>
+            Speeds up the exported video; the voice keeps its pitch.
+          </Help>
+        </>
+      )}
+      <label className="check"><input type="checkbox" checked={s.even_volume ?? true}
+        onChange={(e) => ed.update({ even_volume: e.target.checked })} />Even out the volume</label>
+      <Help>Brings the sound to the level YouTube, TikTok and Instagram play shorts at (−14 LUFS), so a quiet lecture isn't quieter than the videos around it.</Help>
     </div>
+  );
+}
+
+/** What "Fit into" did: shorter pauses first, then a faster export (voice pitch kept). */
+function FitResult({ ed }: { ed: Ed }) {
+  const f = ed.estimate?.fit;
+  if (!f) return <p className="small muted">Working it out…</p>;
+  const steps = [
+    f.min_gap < (ed.short?.min_gap ?? 0.4) ? `pauses over ${f.min_gap.toFixed(2)} s cut` : null,
+    f.speed > (ed.short?.speed ?? 1) + 0.001 ? `${f.speed.toFixed(2)}× faster, same voice pitch` : null,
+  ].filter(Boolean);
+  return (
+    <p className={`small ${f.fits ? "muted" : "err-text"}`}>
+      {f.before <= f.target ? `Already ${fmt(f.before, 0)}: nothing to change.`
+        : f.fits ? `${fmt(f.before, 0)} → ${fmt(f.final, 0)}: ${steps.join(", ")}.`
+        : `Can't fit: even with ${steps.join(" and ")} it's ${fmt(f.final, 0)}. Shorten the clips or pick a longer length (${f.speed.toFixed(1)}× is the most it speeds up).`}
+    </p>
   );
 }
 
@@ -504,6 +539,7 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
   return (
     <div className="panel">
       <label className="check"><input type="checkbox" checked={s.captions} onChange={(e) => ed.update({ captions: e.target.checked })} />Burn in captions</label>
+      {!compact && <h4 className="group-head first">Style</h4>}
       <div className="presets" role="radiogroup" aria-label="Caption style">
         {names.map((n) => (
           <button key={n} type="button" role="radio" aria-label={`${PRESET_LABEL[n] ?? n} style`} aria-checked={s.style === n && !s.style_data}
@@ -521,11 +557,18 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
         <label className="field">Name plate size {plate.size}<input type="range" min={24} max={80} step={2} value={plate.size} onChange={(e) => patchTitle({ size: +e.target.value })} /></label>
       </>}
       <HeightSlider label="Caption height" y={cap.y} onChange={(y) => patch({ y })} />
+      {!compact && <h4 className="group-head">Text</h4>}
       <label className="field">Caption language
-        <select value={s.caption_lang ?? "original"} onChange={(e) => ed.update({ caption_lang: e.target.value })}>
+        <select value={s.caption_lang2 ? "both" : s.caption_lang ?? "original"}
+          onChange={(e) => ed.update(e.target.value === "both"
+            ? { caption_lang: "original", caption_lang2: ed.translationLang }
+            : { caption_lang: e.target.value, caption_lang2: null })}>
           <option value="original">As spoken ({ed.translationLang === "en" ? "Arabic" : "English"})</option>
           <option value={ed.translationLang} disabled={!ed.translation}>
             {ed.translationLang === "en" ? "English" : "Arabic"} translation{ed.translation ? "" : " (translate the transcript first)"}
+          </option>
+          <option value="both" disabled={!ed.translation}>
+            Both: {ed.translationLang === "en" ? "Arabic, English under it" : "English, Arabic under it"}{ed.translation ? "" : " (translate first)"}
           </option>
         </select>
       </label>
@@ -562,6 +605,9 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
             <label className="field">Corners {cap.radius}<input type="range" min={0} max={60} step={2} value={cap.radius} onChange={(e) => patch({ radius: +e.target.value })} /></label>
             <label className="field">Outline {cap.outline}<input type="range" min={0} max={12} step={1} value={cap.outline} onChange={(e) => patch({ outline: +e.target.value })} /></label>
             <label className="field">Words per caption {cap.max_words}<input type="range" min={1} max={6} step={1} value={cap.max_words} onChange={(e) => patch({ max_words: +e.target.value, max_chars: 8 * +e.target.value })} /></label>
+            <label className="field">Longest caption {cap.max_seconds ? `${cap.max_seconds.toFixed(1)} s` : "no limit"}
+              <input type="range" min={0} max={6} step={0.5} value={cap.max_seconds ?? 0}
+                onChange={(e) => patch({ max_seconds: +e.target.value })} /></label>
             <label className="field">Font
               <select value={cap.font} onChange={(e) => { patch({ font: e.target.value }); }}>
                 <option value="Noto Sans Arabic:style=Bold">Noto Sans Arabic Bold</option>
@@ -580,6 +626,7 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
           }}>Save as my style</button>
         </details>
       )}
+      {!compact && <h4 className="group-head">Finish</h4>}
       <label className="check"><input type="checkbox" checked={s.grade} onChange={(e) => ed.update({ grade: e.target.checked })} />Colour grade</label>
       <Help more="A little more contrast and colour, slight sharpening, and gently darkened corners. Leave it off to keep the original colours.">
         A punchier look. Shows in the rendered video only.
@@ -590,7 +637,7 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
 
 /* ---------- one-line summaries of each settings section ---------- */
 
-export type Section = "pauses" | "look" | "framing" | "export" | "post";
+export type Section = "pauses" | "look" | "text" | "framing" | "export" | "post";
 
 export function summary(ed: Ed, sec: Section): string {
   const s = ed.short;
@@ -604,8 +651,14 @@ export function summary(ed: Ed, sec: Section): string {
     const spoken = ed.translationLang === "en" ? "Arabic" : "English";
     const original = (s.caption_lang ?? "original") === "original";
     const harakat = { all: "harakat everywhere", quran: "harakat in Quran only", none: "no harakat" }[s.harakat ?? "all"];
-    const caps = !s.captions ? "No captions" : `${base} · ${original ? `${spoken}, ${harakat}` : ed.translationLang === "en" ? "English" : "Arabic"}`;
+    const both = s.caption_lang2 ? ` + ${ed.translationLang === "en" ? "English" : "Arabic"} under it` : "";
+    const caps = !s.captions ? "No captions" : `${base} · ${original ? `${spoken}${both}, ${harakat}` : ed.translationLang === "en" ? "English" : "Arabic"}`;
     return caps + (s.grade ? " · graded" : "");
+  }
+  if (sec === "text") {
+    if (!s.captions) return "Captions off";
+    const n = ed.captions?.captions.length;
+    return n == null ? "" : `${n} caption${n === 1 ? "" : "s"}, word for word`;
   }
   if (sec === "framing") {
     const cams = (ed.cameras?.cameras ?? []).filter((c) => c.count >= 2);
@@ -616,5 +669,118 @@ export function summary(ed: Ed, sec: Section): string {
     if (s.published?.youtube) return "Posted to YouTube";
     return !s.rendered ? "Render first" : s.post?.title ? "Text ready" : "Ready to post";
   }
-  return (s.speed ?? 1) === 1 ? "Normal speed" : `${(s.speed ?? 1).toFixed(2)}× speed`;
+  const vol = (s.even_volume ?? true) ? "even volume" : "original volume";
+  if (s.fit_to) return `Fit into ${fmt(s.fit_to, 0)} · ${vol}`;
+  return `${(s.speed ?? 1) === 1 ? "Normal speed" : `${(s.speed ?? 1).toFixed(2)}× speed`} · ${vol}`;
+}
+
+/* ---------- caption text: the captions the render shows, word for word ---------- */
+
+const NO_EDITS: CaptionEdits = { starts: [], joins: [], times: {} };
+
+/** This short's caption edits with one change. */
+export function captionEdit(ed: Ed, change: (e: CaptionEdits) => void) {
+  const e = structuredClone(ed.short?.caption_edits ?? NO_EDITS);
+  change(e);
+  return ed.setCaptionEdits(e);
+}
+
+export function CaptionTextPanel({ ed, time, onPlay, selKey, onSelKey }: {
+  ed: Ed; time: number; onPlay: (r: Range) => void; selKey: number | null; onSelKey: (k: number | null) => void;
+}) {
+  const caps = ed.captions;
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const list = useRef<HTMLOListElement>(null);
+  const live = caps?.captions.find((c) => time >= c.src[0] && time < c.src[1])?.key ?? null;
+  useEffect(() => {  // keep the caption on screen in view
+    const k = selKey ?? live;
+    if (k == null) return;
+    list.current?.querySelector(`[data-key="${k}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [live, selKey]);
+  useEffect(() => { setDraft(null); }, [selKey]);
+  if (!ed.short?.captions) return <p className="small muted pad">Captions are off for this short (Captions and look).</p>;
+  if (!caps) return <p className="small muted pad">Working out the captions…</p>;
+  if (!caps.captions.length) return <p className="small muted pad">Add a clip to see its captions.</p>;
+  const edits = ed.short.caption_edits;
+  const changed = !!edits && (edits.starts.length + edits.joins.length + Object.keys(edits.times).length > 0);
+  const nWords = caps.captions.reduce((n, c) => n + c.words.length, 0);
+
+  const save = async (c: Caption) => {
+    const idx = c.words.map((w) => w.i);
+    if (draft == null || idx.some((i) => i == null)) return;
+    setSaving(true);
+    const ok = await ed.editCaptionText(Math.min(...(idx as number[])), Math.max(...(idx as number[])) + 1, draft.trim());
+    setSaving(false);
+    if (ok) setDraft(null);
+  };
+
+  return (
+    <div className="cap-list">
+      <div className="row">
+        <span className="small muted">{caps.captions.length} captions · {nWords} words, exactly as rendered</span>
+        <span className="grow" />
+        {changed && <button type="button" className="link small" onClick={() => ed.setCaptionEdits(NO_EDITS)}>Reset splits and timing</button>}
+      </div>
+      {!caps.editable && <p className="small muted">These captions are a translation: fix their text in the transcript's translation.</p>}
+      <ol ref={list}>
+        {caps.captions.map((c, n) => {
+          const sel = c.key === selKey;
+          const next = caps.captions[n + 1];
+          return (
+            <li key={`${c.key}-${n}`} data-key={c.key} className={`cap-row ${sel ? "sel" : ""} ${c.key === live ? "live" : ""}`}>
+              <button type="button" className="cap-main" onClick={() => { onSelKey(c.key); onPlay(c.src); }}
+                title="Play this caption">
+                <span className={`tc cap-time ${c.timed ? "timed" : ""}`}>{fmt(c.s, 1)}</span>
+                <span className="cap-text" dir="auto">{c.words.map((w) => w.w).join(" ")}</span>
+              </button>
+              {sel && (
+                <div className="cap-tools">
+                  {draft != null ? (
+                    <form className="cap-edit" onSubmit={(e) => { e.preventDefault(); save(c); }}>
+                      <input dir="auto" autoFocus value={draft} disabled={saving} aria-label="Caption text"
+                        onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setDraft(null)} />
+                      <button type="submit" className="btn small primary" disabled={saving || !draft.trim()}>Save</button>
+                      <button type="button" className="btn small" onClick={() => setDraft(null)}>Cancel</button>
+                      <span className="small muted">Saved to the transcript too.</span>
+                    </form>
+                  ) : (
+                    <>
+                      <span className="cap-split" dir="auto" aria-label="Click a word to start a new caption there">
+                        {c.words.map((w, k) => (
+                          <span key={k}>
+                            {k > 0 && (
+                              <button type="button" className="cap-cut" title="Start a new caption here"
+                                aria-label={`Split before ${w.w}`}
+                                onClick={() => captionEdit(ed, (e) => { e.starts.push(w.t); e.joins = e.joins.filter((t) => t !== w.t); })}>⁞</button>
+                            )}
+                            <span>{w.w}</span>
+                          </span>
+                        ))}
+                      </span>
+                      <span className="row">
+                        {caps.editable && c.words.every((w) => w.i != null) && (
+                          <button type="button" className="btn small" onClick={() => setDraft(c.words.map((w) => w.raw).join(" "))}>Edit text</button>
+                        )}
+                        {next && (
+                          <button type="button" className="btn small" title="Show this caption and the next one together"
+                            onClick={() => captionEdit(ed, (e) => {
+                              e.joins.push(next.key); e.starts = e.starts.filter((t) => t !== next.key); delete e.times[String(next.key)];
+                            })}>Join with next</button>
+                        )}
+                        {c.timed && (
+                          <button type="button" className="btn small" onClick={() => captionEdit(ed, (e) => { delete e.times[String(c.key)]; })}>
+                            Reset timing</button>
+                        )}
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }

@@ -48,6 +48,7 @@ export interface TextStyle {
   y: number;
   max_words: number;
   max_chars: number;
+  max_seconds?: number;  // longest a caption stays up, 0 = no limit
   fade_ms: number;
 }
 
@@ -75,11 +76,23 @@ export interface ShortSettings {
   quran_tag?: boolean;    // surah and ayah on screen while a Quran verse is quoted
   follow?: "main" | "talking";  // framing: hold the main speaker, or cut to whoever is talking
   post?: Post | null;     // what to publish the short with
+  even_volume?: boolean;  // level the audio to what the platforms play at
+  fit_to?: number | null; // target length in seconds: cut shorter pauses, then speed up
+  caption_lang2?: string | null;  // a second caption line in this language (a saved translation)
 }
 
 export interface Post { title: string; description: string; hashtags: string[]; model?: string }
 
 export interface Moment { s: number; e: number; title: string; reason: string }
+
+/** One caption exactly as the render burns it in. s/e: in the finished short; src: in the lecture. */
+export interface Caption {
+  s: number; e: number; src: Range; key: number; timed: boolean;
+  words: { w: string; i: number | null; t: number; e: number; raw: string }[];  // t/e: the word in the lecture (t names it in edits)
+}
+/** The second caption line (a translation under the original). */
+export interface SubCaption { s: number; e: number; src: Range; text: string }
+export interface CaptionEdits { starts: number[]; joins: number[]; times: Record<string, Range> }
 
 export interface Published { id: string; url: string; privacy: string; publish_at: number | null; at: number }
 
@@ -91,6 +104,7 @@ export interface Short extends ShortSettings {
   rendered: boolean;
   job: Job | null;
   last_render?: { duration: number; cuts: number; hard_cuts: number; at: number };
+  caption_edits?: CaptionEdits | null;  // this short's own caption splits, joins and timing
 }
 
 export interface Estimate {
@@ -98,6 +112,7 @@ export interface Estimate {
   duration: number;
   cuts: number;
   segments: Range[];
+  fit: { target: number; min_gap: number; speed: number; final: number; fits: boolean; before: number } | null;
 }
 
 export interface Word {
@@ -172,6 +187,7 @@ const json = (body: unknown, method = "POST"): RequestInit => ({
 export const defaultSettings = (name = "Short 1"): ShortSettings => ({
   name, ranges: [], title: null, style: "pill", style_data: null, min_gap: 0.4,
   transition: "morph", transition_frames: 4, zoom: 1, grade: false, captions: true, speed: 1, harakat: "all", quran_tag: true,
+  even_volume: true,
 });
 
 export const api = {
@@ -237,6 +253,13 @@ export const api = {
   shorts: (id: string) => req<Short[]>(`/api/lectures/${id}/shorts`),
   createShort: (id: string, s: ShortSettings) => req<Short>(`/api/lectures/${id}/shorts`, json(s)),
   updateShort: (id: string, sid: string, s: ShortSettings) => req<Short>(`/api/lectures/${id}/shorts/${sid}`, json(s, "PUT")),
+  captions: (id: string, sid: string, s: ShortSettings) =>
+    req<{ captions: Caption[]; editable: boolean; sub?: SubCaption[] }>(`/api/lectures/${id}/shorts/${sid}/captions`, json(s)),
+  setCaptionEdits: (id: string, sid: string, e: CaptionEdits) =>
+    req<{ captions: Caption[]; editable: boolean; sub?: SubCaption[] }>(`/api/lectures/${id}/shorts/${sid}/captions`, json(e, "PUT")),
+  /** replace the words i0..i1-1 (one caption) in the transcript */
+  editWords: (id: string, i0: number, i1: number, text: string) =>
+    req<Transcript>(`/api/lectures/${id}/transcript/words`, json({ i0, i1, text }, "PUT")),
   deleteShort: (id: string, sid: string) => req<{ ok: boolean }>(`/api/lectures/${id}/shorts/${sid}`, { method: "DELETE" }),
   render: (id: string, sid: string) => req<Job>(`/api/lectures/${id}/shorts/${sid}/render`, { method: "POST" }),
   jobs: (lectureId?: string) => req<Job[]>(`/api/jobs${lectureId ? `?lecture_id=${lectureId}` : ""}`),

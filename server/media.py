@@ -330,6 +330,45 @@ def edit_segment(lid: str, k: int, text: str | None) -> dict:
     return data
 
 
+def edit_words(lid: str, i0: int, i1: int, text: str) -> dict:
+    """Replace the text of words i0..i1-1 (a caption) in the transcript. With
+    the same number of words each keeps its timing; otherwise the words must
+    be in one sentence, which is then edited as a whole (see edit_segment)."""
+    data = transcript(lid)
+    if data is None:
+        raise KeyError("transcript")
+    tokens = text.split()
+    if not tokens:
+        raise ValueError("a caption can't be empty")
+    words = data["words"]
+    if not 0 <= i0 < i1 <= len(words):
+        raise IndexError("words")
+    segs = [k for k, g in enumerate(data["segments"]) if g["w0"] < i1 and g["w1"] > i0]
+    if len(tokens) != i1 - i0:
+        if len(segs) != 1:
+            raise ValueError("this caption covers two sentences: keep the same number of words, "
+                             "or change the word count in the transcript")
+        g = data["segments"][segs[0]]
+        cur = [w["w"] for w in words[g["w0"]:g["w1"]]]
+        return edit_segment(lid, segs[0], " ".join(cur[:i0 - g["w0"]] + tokens + cur[i1 - g["w0"]:]))
+    # same count: only the changed words change, each keeping its timing
+    for k in segs:
+        g = data["segments"][k]
+        old = [dict(w) for w in words[g["w0"]:g["w1"]]]
+        changed = False
+        for i in range(max(i0, g["w0"]), min(i1, g["w1"])):
+            if words[i]["w"] != tokens[i - i0]:
+                words[i]["w"] = tokens[i - i0]
+                for f in ("flag", "why", "checked"):
+                    words[i].pop(f, None)
+                changed = True
+        if changed:
+            g.setdefault("orig", old)
+            g["edited"] = True
+    words_path(store.source_path(lid)).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
 def edit_word(lid: str, i: int, text: str | None) -> dict:
     """Settle word i: replace it with `text` (one of the other readings), or
     None to keep it as recognised. See transcript_edit.replace_word."""
@@ -430,14 +469,17 @@ def framing_at(lid: str, t: float) -> dict:
 def set_framing_at(lid: str, t: float, x: float) -> dict:
     """Set the manual framing of the camera angle shown at time t from a crop
     centre x in that frame (mapped back to the angle's reference frame)."""
-    from shorts.cameras import to_reference
+    from shorts.cameras import add_angle, to_reference
 
     meta = store.get_lecture(lid)
     frame = _frame_at(store.source_path(lid), t, meta["width"], meta["height"])
     fr = framing_at_frame(lid, frame)
-    if not fr or fr["camera"] is None:
+    if fr is None:
         raise ValueError("couldn't tell which camera angle is on screen here")
     data = cameras(lid)
+    if fr["camera"] is None:  # a shot the analysis never sampled: it becomes an angle of its own
+        cam = add_angle(data, frame, store.lecture_dir(lid) / "cameras")
+        fr = {**fr, "camera": cam["id"], "H": np.eye(3)}
     rx, ry = to_reference(fr["H"], x, fr["y"], tuple(data["geo"]))
     cam = next(c for c in data["cameras"] if c["id"] == fr["camera"])
     cam["manual"] = {"x": round(rx, 4), "y": round(ry, 4)}
@@ -460,7 +502,7 @@ def _framing_at(lid: str, frame: np.ndarray, W: int, H: int) -> tuple[float, flo
 
 def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom: float,
                   captions: bool, harakat: str = "all", caption_lang: str = "original",
-                  quran_tag: bool = True) -> bytes:
+                  quran_tag: bool = True, caption_lang2: str | None = None) -> bytes:
     meta = store.get_lecture(lid)
     src = store.source_path(lid)
     W, H = meta["width"], meta["height"]
@@ -500,7 +542,18 @@ def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom:
             lang = "ar" if caption_lang in ("original", "ar") else caption_lang
             w = min(qw, key=lambda w: 0 if w["s"] <= t <= w["e"] else min(abs(w["s"] - t), abs(w["e"] - t)))
             tags = [(t - 1, t + 1, quran_label(w.get("ayah") or w["quran"], lang))]
-    ov = Overlay(chunks, replace(style, captions=replace(style.captions, fade_ms=0)), title, tags)
+    sub = []
+    if captions and caption_lang2 and caption_lang == "original":
+        from shorts.captions import sub_style
+
+        try:
+            near = [(w["w"], w["s"], w["e"]) for w in translated_words(src, caption_lang2) if t - 4 <= w["s"] <= t + 4]
+        except ValueError:
+            near = []
+        sub = [c for c in chunk(near, sub_style(style.captions)) if c[0][1] <= t <= c[-1][2] + 0.3][:1]
+        if sub:
+            sub = [[(w[0], min(w[1], t), max(w[2], t + 0.01)) for w in sub[0]]]
+    ov = Overlay(chunks, replace(style, captions=replace(style.captions, fade_ms=0)), title, tags, sub)
     ov.apply(img, t)
     ok, jpg = cv2.imencode(".jpg", cv2.resize(img, (540, 960), interpolation=cv2.INTER_AREA),
                            [cv2.IMWRITE_JPEG_QUALITY, 85])

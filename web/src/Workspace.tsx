@@ -2,26 +2,36 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { api, type Moment, type Range, type Word } from "./api";
 import { Confirm } from "./Confirm";
 import { TopBar, type Ed } from "./Editor";
-import { CaptionsPanel, ClipStrip, ExportPanel, FramingPanel, PausesPanel, PostPanel, Preview, Stats, cropWidth, sortedCameras, summary, type Section } from "./panels";
+import { CaptionTextPanel, CaptionsPanel, ClipStrip, captionEdit, ExportPanel, FramingPanel, PausesPanel, PostPanel, Preview, Stats, cropWidth, sortedCameras, summary, type Section } from "./panels";
 import { VolumeControl } from "./Volume";
 import { SpeedPicker, at, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
 import { clamp, fmt, normalize } from "./util";
 
-const SECTIONS: Section[] = ["pauses", "look", "framing", "export", "post"];
-const SECTION_NAME: Record<Section, string> = { pauses: "Pauses", look: "Captions & look", framing: "Framing", export: "Export", post: "Post" };
+const SECTIONS: Section[] = ["pauses", "look", "text", "framing", "export", "post"];
+const SECTION_NAME: Record<Section, string> = { pauses: "Pauses", look: "Captions & look", text: "Caption text", framing: "Framing", export: "Export", post: "Post" };
+const SECTION_SHORT: Record<Section, string> = { pauses: "Pauses", look: "Look", text: "Text", framing: "Frame", export: "Export", post: "Post" };
+const SECTION_ICON: Record<Section, string> = {
+  pauses: "M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12",
+  look: "M4 7V4h16v3M9 20h6M12 4v16",
+  text: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  framing: "M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2",
+  export: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  post: "m22 2-7 20-4-9-9-4zM22 2 11 13",
+};
 const SECTION_KEY = "settings-section";
+const PREVIEW_KEY = "preview-hidden";
 
-function storedSection(): Section | null {
+function storedSection(): Section {
   try {
     const v = localStorage.getItem(SECTION_KEY);
-    return v === "" ? null : SECTIONS.includes(v as Section) ? (v as Section) : "look";
+    return SECTIONS.includes(v as Section) ? (v as Section) : "look";
   } catch { return "look"; }
 }
 
-/** Preview width that leaves room for the settings under it on short screens. */
+/** Preview width that leaves room for the settings above it on short screens. */
 function usePreviewWidth() {
-  const calc = () => Math.round(Math.min(200, Math.max(140, ((window.innerHeight - 520) * 9) / 16)));
+  const calc = () => Math.round(Math.min(170, Math.max(110, ((window.innerHeight - 640) * 9) / 16)));
   const [w, setW] = useState(calc);
   useEffect(() => {
     const on = () => setW(calc());
@@ -44,11 +54,19 @@ export function Workspace({ ed }: { ed: Ed }) {
   const [playing, setPlaying] = useState(false);
   const [sel, setSel] = useState<Range | null>(null);
   const [view, setView] = useState<Range>([0, Math.min(duration || 120, 120)]);
-  const [open, setOpenState] = useState<Section | null>(storedSection);
-  const setOpen = (v: Section | null) => {
-    setOpenState(v);
-    try { localStorage.setItem(SECTION_KEY, v ?? ""); } catch { /* storage unavailable */ }
+  const [capKey, setCapKey] = useState<number | null>(null);  // the caption picked in the list or on the timeline
+  const [section, setSection] = useState<Section>(storedSection);
+  const setOpen = (v: Section) => {
+    setSection(v);
+    try { localStorage.setItem(SECTION_KEY, v); } catch { /* storage unavailable */ }
   };
+  const [previewHidden, setPreviewHiddenState] = useState(() => { try { return localStorage.getItem(PREVIEW_KEY) === "1"; } catch { return false; } });
+  const setPreviewHidden = (v: boolean) => {
+    setPreviewHiddenState(v);
+    try { localStorage.setItem(PREVIEW_KEY, v ? "1" : ""); } catch { /* storage unavailable */ }
+  };
+  const ce = ed.short?.caption_edits;
+  const captionsEdited = !!ce && (ce.starts.length > 0 || ce.joins.length > 0 || Object.keys(ce.times).length > 0);
   // a render just finished: show what to post it with
   const renderedAt = ed.short?.last_render?.at;
   const seenRender = useRef({ id: ed.short?.id, at: renderedAt });
@@ -179,7 +197,7 @@ export function Workspace({ ed }: { ed: Ed }) {
   const how = (useExact ? exact!.mode : cam?.manual ? "manual" : "lecturer");
   const guideLabel = cam
     ? `${camIndex >= 0 ? `Camera ${camIndex + 1}${cam.count < 2 ? " (one-off)" : ""}` : "9:16 frame"} · ${how === "manual" ? "your framing" : how === "lecturer" ? "on the speaker" : how === "camera" ? "usual position" : "centred"}${playing ? "" : " · drag to adjust"}`
-    : "9:16 frame";
+    : `9:16 frame${playing ? "" : " · drag to adjust"}`;
   const guideX = (e: React.PointerEvent<HTMLDivElement>) => {
     const r = (e.currentTarget.parentElement as HTMLElement).getBoundingClientRect();
     return Math.min(1 - cw / 2, Math.max(cw / 2, (e.clientX - r.left) / r.width));
@@ -209,17 +227,17 @@ export function Workspace({ ed }: { ed: Ed }) {
             <video ref={video} src={api.videoUrl(ed.lecture.id)} poster={api.thumbUrl(ed.lecture.id)} preload="auto" playsInline
               onPlay={() => setPlaying(true)} onPause={() => { setPlaying(false); setTime(video.current?.currentTime ?? 0); }}
               onSeeked={onSeeked} onClick={toggle} />
-            <div className={`crop-guide ${cam ? "draggable" : ""} ${cam?.manual ? "manual" : ""}`}
+            <div className={`crop-guide ${playing ? "" : "draggable"} ${cam?.manual ? "manual" : ""}`}
               style={{ width: `${cw * 100}%`, left: `${guideLeft}%` }}
               onPointerDown={(e) => {
-                if (!cam) return;
+                if (playing) return;
                 e.stopPropagation();
                 try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
                 setGuideDrag(guideX(e));
               }}
               onPointerMove={(e) => guideRef.current != null && setGuideDrag(guideX(e))}
               onPointerUp={(e) => {
-                if (guideRef.current == null || !cam) return;
+                if (guideRef.current == null) return;
                 const x = guideX(e);
                 // set the angle on screen now, mapped onto its reference frame by the server
                 ed.setFramingAt(video.current?.currentTime ?? time, Math.round(x * 1000) / 1000);
@@ -263,35 +281,47 @@ export function Workspace({ ed }: { ed: Ed }) {
             <button type="button" className="btn small sq" aria-label="Zoom out" onClick={() => zoomTo(span * 1.6)}>−</button>
             <button type="button" className="btn small sq" aria-label="Zoom in" onClick={() => zoomTo(span / 1.6)}>+</button>
           </div>
-          <Timeline duration={duration} peaks={ed.waveform} speech={ed.speech} minGap={s?.min_gap ?? 0.4}
+          <Timeline duration={duration} peaks={ed.waveform} speech={ed.speech} minGap={ed.estimate?.fit?.min_gap ?? s?.min_gap ?? 0.4}
             ranges={s?.ranges ?? []} selection={sel} time={time} view={view} onView={setView}
-            onSeek={seek} onSelect={setSel} />
+            onSeek={seek} onSelect={setSel}
+            captions={s?.captions ? ed.captions?.captions ?? [] : []} captionKey={capKey}
+            onCaption={(c) => { setCapKey(c.key); seek(c.src[0]); }}
+            onCaptionOpen={(c) => { setCapKey(c.key); setOpen("text"); playRange(c.src); }}
+            onCaptionTime={(c, r) => captionEdit(ed, (e) => { e.times[String(c.key)] = [Math.round(r[0] * 100) / 100, Math.round(r[1] * 100) / 100]; })} />
           <ClipStrip ed={ed} onPlay={playRange} />
         </section>
 
         <aside className="side" aria-label="Preview and settings">
-          <div className="side-head">
-            <Preview ed={ed} t={time} width={previewWidth} />
-            <Stats ed={ed} />
-          </div>
-          <div className="side-body">
+          <nav className="rail" aria-label="Settings sections">
             {SECTIONS.map((sec) => (
-              <section key={sec} className={`acc ${open === sec ? "open" : ""}`}>
-                <h3>
-                  <button type="button" aria-expanded={open === sec} aria-controls={`acc-${sec}`} onClick={() => setOpen(open === sec ? null : sec)}>
-                    <span className="acc-name">{SECTION_NAME[sec]}</span>
-                    <span className="acc-sum" dir="auto">{summary(ed, sec)}</span>
-                  </button>
-                </h3>
-                <div id={`acc-${sec}`} role="region" aria-label={SECTION_NAME[sec]} hidden={open !== sec}>
-                  {sec === "pauses" && <PausesPanel ed={ed} />}
-                  {sec === "look" && <CaptionsPanel ed={ed} />}
-                  {sec === "framing" && <FramingPanel ed={ed} />}
-                  {sec === "export" && <ExportPanel ed={ed} />}
-                  {sec === "post" && <PostPanel ed={ed} />}
-                </div>
-              </section>
+              <button key={sec} type="button" aria-current={section === sec ? "true" : undefined} aria-controls="settings-panel"
+                title={`${SECTION_NAME[sec]}: ${summary(ed, sec)}`} onClick={() => setOpen(sec)}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d={SECTION_ICON[sec]} /></svg>
+                {SECTION_SHORT[sec]}
+                {sec === "text" && captionsEdited && <i className="rail-dot" title="Has your own caption splits or timing" />}
+              </button>
             ))}
+          </nav>
+          <div className="side-main">
+            <div className="side-title">
+              <h3>{SECTION_NAME[section]}</h3>
+              <span dir="auto">{summary(ed, section)}</span>
+            </div>
+            <div className="side-body" id="settings-panel" role="region" aria-label={SECTION_NAME[section]}>
+              {section === "pauses" && <PausesPanel ed={ed} />}
+              {section === "look" && <CaptionsPanel ed={ed} />}
+              {section === "text" && <CaptionTextPanel ed={ed} time={time} onPlay={(r) => { show(r[0], r[1]); playRange(r); }} selKey={capKey} onSelKey={setCapKey} />}
+              {section === "framing" && <FramingPanel ed={ed} />}
+              {section === "export" && <ExportPanel ed={ed} />}
+              {section === "post" && <PostPanel ed={ed} />}
+            </div>
+            <div className="dock">
+              <Stats ed={ed} />
+              <button type="button" className="dock-bar" aria-expanded={!previewHidden} onClick={() => setPreviewHidden(!previewHidden)}>
+                <b>Preview</b><span>{previewHidden ? "▸ show" : "▾ hide"}</span>
+              </button>
+              {!previewHidden && <Preview ed={ed} t={time} width={previewWidth} />}
+            </div>
           </div>
         </aside>
       </div>

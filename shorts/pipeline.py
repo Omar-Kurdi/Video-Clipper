@@ -10,7 +10,7 @@ from .captions import Overlay, Style, chunk, load_style, map_words, style_from_d
 from .cut import joins, render_cut
 from .plan import CutSettings, Segment, output_frames, plan
 from .reframe import ReframeSettings, crop_path, ease_crop_across
-from .render import render_vertical
+from .render import LOUDNESS, render_vertical
 from .transcribe import load_words, transcribe_ranges, words_path
 from .util import gpu_encoder, probe
 
@@ -43,6 +43,10 @@ class ShortOptions:
     model: str = "large-v3"
     device: str | None = None        # None: the GPU when there is one, else the CPU
     identity: dict | None = None     # camera analysis (cameras.json): lecturer + per-camera framing
+    caption_edits: dict | None = None  # the user's caption splits/joins/timing, see caption_chunks
+    even_volume: bool = True         # level the audio to the platforms' loudness (render.LOUDNESS)
+    fit_to: float | None = None      # target length in seconds: cut shorter pauses, then speed up
+    caption_lang2: str | None = None # a second caption line under the first, in this language
     extra: dict = field(default_factory=dict)
 
 
@@ -78,6 +82,45 @@ def in_ranges(words: list[dict], ranges) -> list[dict]:
     """The words whose middle is inside a chosen range. The cut pads each range
     a little, and a word just before the range would otherwise get a caption."""
     return [w for w in words if any(a <= (w["s"] + w["e"]) / 2 < b for a, b in ranges)]
+
+
+def caption_chunks(o: ShortOptions, words: list[dict], segs, fps, d: int, ts) -> list[list]:
+    """The captions exactly as the render burns them in: the transcript words
+    of the chosen ranges, grouped into captions, with the user's edits.
+    `o.caption_edits`: {"starts": [t], "joins": [t], "times": {"t": [a, b]}},
+    words named by their start in the lecture (see captions.word_key); a
+    caption whose first word is in "times" is shown from a to b (lecture time)."""
+    from .captions import to_output, word_key
+
+    ed = o.caption_edits or {}
+    src = caption_words(in_ranges([{**w, "_i": k} for k, w in enumerate(words)], o.ranges), o.harakat)
+    chunks = chunk(map_words(src, segs, fps, d, keep_all=True), ts,
+                   starts={round(t, 2) for t in ed.get("starts", [])},
+                   joins={round(t, 2) for t in ed.get("joins", [])})
+    times = {round(float(k), 2): v for k, v in (ed.get("times") or {}).items()}
+    for n, c in enumerate(chunks):
+        span = times.get(word_key(c[0]))
+        if not span:
+            continue
+        a, b = to_output(span[0], segs, fps, d), to_output(span[1], segs, fps, d)
+        if b <= a:
+            continue
+        c0, c1 = c[0][1], max(c[-1][2], c[0][1] + 1e-3)
+        f = lambda t: a + (t - c0) * (b - a) / (c1 - c0)
+        chunks[n] = [(w[0], f(w[1]), f(w[2]), *w[3:]) for w in c]
+    chunks.sort(key=lambda c: c[0][1])
+    return chunks
+
+
+def sub_chunks(video: Path, o: ShortOptions, segs, fps, d: int, ts) -> list[list]:
+    """The second caption line (o.caption_lang2, a saved translation), timed
+    with the sentences it translates; [] when there is none to show."""
+    from .captions import sub_style
+
+    if not (o.captions and o.caption_lang2 and o.caption_lang == "original"):
+        return []
+    words = in_ranges(translated_words(video, o.caption_lang2), o.ranges)
+    return chunk(map_words(words, segs, fps, d, keep_all=True), sub_style(ts))
 
 
 def translated_words(video: Path, lang: str) -> list[dict]:
@@ -126,6 +169,34 @@ def get_words(video: Path, o: ShortOptions, progress: Progress | None = None) ->
     return words
 
 
+FIT_GAPS = (0.35, 0.30, 0.25, 0.20, 0.15)  # shorter pauses tried, longest first
+MAX_FIT_SPEED = 1.5                        # faster than this and speech is hard to follow
+
+
+def fit(video: Path, o: ShortOptions, words: list[dict]) -> tuple[ShortOptions, dict | None]:
+    """With `o.fit_to`: the options that bring the short to that length. Cut
+    pauses down to shorter ones first (only silence goes, never speech), then
+    speed up with the voice's pitch kept, up to MAX_FIT_SPEED. Returns the
+    options to render with and what was done (None without a target)."""
+    if not o.fit_to or not o.ranges:
+        return o, None
+    target = float(o.fit_to)
+    base = o.speed or 1.0
+    gap, dur = o.min_gap, None
+    for g in (o.min_gap, *[g for g in FIT_GAPS if g < o.min_gap]):
+        info, segs, _ = plan_short(video, replace(o, min_gap=g), words)
+        d = float(output_frames(segs, o.transition_frames) / info.fps)
+        if dur is None or d < dur - 0.05:  # a shorter threshold only counts if it shortens the short
+            gap, dur = g, d
+        if dur / base <= target:
+            break
+    speed = min(MAX_FIT_SPEED, max(base, dur / target))
+    final = dur / speed
+    return replace(o, min_gap=gap, speed=round(speed, 3)), {
+        "target": target, "min_gap": gap, "speed": round(speed, 3), "final": round(final, 2),
+        "fits": final <= target + 0.05, "before": round(dur / base, 2)}
+
+
 def plan_short(video: Path, o: ShortOptions, words: list[dict]):
     info = probe(video)
     cs = CutSettings(min_gap=o.min_gap, fade_frames=o.transition_frames)
@@ -135,12 +206,44 @@ def plan_short(video: Path, o: ShortOptions, words: list[dict]):
 
 def estimate(video: Path, o: ShortOptions, words: list[dict] | None = None) -> dict:
     """Cheap preview of what the cut will do (no rendering)."""
+    o, fitted = fit(video, o, words if words is not None else [])
     info, segs, _ = plan_short(video, o, words if words is not None else [])
     n_out = output_frames(segs, o.transition_frames)
     return {"selected": sum(b - a for a, b in o.ranges),
             "duration": float(n_out / info.fps),
-            "cuts": len(segs) - 1,
+            "cuts": len(segs) - 1, "fit": fitted,
             "segments": [[float(s.f0 / info.fps), float(s.f1 / info.fps)] for s in segs]}
+
+
+def caption_list(video: Path, o: ShortOptions) -> dict:
+    """What the render would show, caption by caption (no rendering): for the
+    editor's caption list and track. Times: "s"/"e" in the finished short,
+    "src" in the lecture."""
+    if not words_path(video).exists():
+        return {"captions": [], "editable": False}
+    words = load_words(video)
+    if o.caption_lang != "original":
+        words = translated_words(video, o.caption_lang)
+    o, _ = fit(video, o, load_words(video))
+    info, segs, _ = plan_short(video, o, load_words(video))
+    chunks = caption_chunks(o, words, segs, info.fps, o.transition_frames, resolve_style(o).captions)
+    try:
+        sub = sub_chunks(video, o, segs, info.fps, o.transition_frames, resolve_style(o).captions)
+    except ValueError:  # no translation yet
+        sub = []
+    sp = o.speed or 1.0
+    times = {round(float(k), 2): v for k, v in ((o.caption_edits or {}).get("times") or {}).items()}
+    return {"editable": o.caption_lang == "original",
+            "captions": [{"s": round(c[0][1] / sp, 2), "e": round(c[-1][2] / sp, 2),
+                          "src": times.get(round(c[0][4], 2)) or [round(min(w[4] for w in c), 2), round(max(w[5] for w in c), 2)],
+                          "timed": round(c[0][4], 2) in times,
+                          "key": round(c[0][4], 2),
+                          "words": [{"w": w[0], "i": w[3], "t": round(w[4], 2), "e": round(w[5], 2),
+                                     "raw": words[w[3]]["w"] if w[3] is not None else w[0]} for w in c]}
+                         for c in chunks],
+            "sub": [{"s": round(c[0][1] / sp, 2), "e": round(c[-1][2] / sp, 2),
+                     "src": [round(min(w[4] for w in c), 2), round(max(w[5] for w in c), 2)],
+                     "text": " ".join(w[0] for w in c)} for c in sub]}
 
 
 def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | None = None,
@@ -155,6 +258,10 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
     # full transcript (as the estimate/preview does), never range-only words
     plan_words = load_words(video) if words_path(video).exists() else []
     cb = _stage(progress, "plan")
+    o, fitted = fit(video, o, plan_words)
+    if fitted:
+        log(f"fit into {fitted['target']:.0f}s: pauses over {fitted['min_gap']:.2f}s cut, "
+            f"{fitted['speed']:.2f}x speed, {fitted['final']:.1f}s")
     info, segs, firsts = plan_short(video, o, plan_words)
     fps, d = info.fps, o.transition_frames
     n_out = output_frames(segs, d)
@@ -195,12 +302,14 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
             if o.quran_tag and o.captions else []  # the tag belongs with the captions
         if o.captions or o.title or tags:
             style = resolve_style(o)
-            chunks = chunk(map_words(caption_words(in_ranges(words, o.ranges), o.harakat), segs, fps, d), style.captions) if o.captions else []
-            overlay = Overlay(chunks, style, o.title, tags)
+            chunks = caption_chunks(o, words, segs, fps, d, style.captions) if o.captions else []
+            sub = sub_chunks(video, o, segs, fps, d, style.captions)
+            overlay = Overlay(chunks, style, o.title, tags, sub)
 
         cb = _stage(progress, "render")
         render_vertical(cut, path, fps, windows, d, overlay, out, o.grade,
-                        on_frame=lambda i: cb(i / n_out), speed=o.speed)
+                        on_frame=lambda i: cb(i / n_out), speed=o.speed,
+                        loudness=LOUDNESS if o.even_volume else None)
         cb(1.0)
         if report is not None:
             report.write_text(json.dumps({

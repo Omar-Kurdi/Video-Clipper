@@ -95,6 +95,9 @@ class ShortIn(BaseModel):
     quran_tag: bool = True  # surah and ayah on screen while a Quran verse is quoted
     follow: str = "main"  # framing: "main" speaker, or cut to whoever is "talking"
     post: dict | None = None  # {"title", "description", "hashtags"} to publish the short with
+    even_volume: bool = True  # level the audio to what the platforms play at (-14 LUFS)
+    fit_to: float | None = Field(None, ge=5)  # target length in seconds: shorter pauses, then faster
+    caption_lang2: str | None = None  # a second caption line in this language (a saved translation)
 
 
 class PreviewIn(BaseModel):
@@ -107,6 +110,7 @@ class PreviewIn(BaseModel):
     harakat: str = "all"
     caption_lang: str = "original"
     quran_tag: bool = True
+    caption_lang2: str | None = None
 
 
 class CutPreviewIn(ShortIn):
@@ -137,7 +141,8 @@ def _options(lecture: dict, s: dict) -> ShortOptions:
         zoom=s["zoom"], grade=s["grade"], captions=s["captions"], language=lecture.get("language"),
         speed=float(s.get("speed", 1.0)), harakat=s.get("harakat", "all"),
         caption_lang=s.get("caption_lang", "original"), quran_tag=s.get("quran_tag", True),
-        follow=s.get("follow", "main"))
+        follow=s.get("follow", "main"), caption_edits=s.get("caption_edits"),
+        even_volume=s.get("even_volume", True), fit_to=s.get("fit_to"), caption_lang2=s.get("caption_lang2"))
 
 
 def _analyze_job(lid: str) -> dict:
@@ -327,6 +332,23 @@ def edit_transcript_word(lid: str, i: int, body: WordEditIn):
         return media.edit_word(lid, i, body.text)
     except IndexError:
         raise HTTPException(404, "no such word")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class WordsEditIn(BaseModel):
+    i0: int
+    i1: int  # exclusive
+    text: str
+
+
+@app.put("/api/lectures/{lid}/transcript/words")
+def edit_transcript_words(lid: str, body: WordsEditIn):
+    """Fix the words of one caption; the transcript (and every short) gets it."""
+    try:
+        return media.edit_words(lid, body.i0, body.i1, body.text)
+    except IndexError:
+        raise HTTPException(404, "no such words")
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -559,7 +581,7 @@ def lecture_estimate(lid: str, body: ShortIn):
 def lecture_preview(lid: str, body: PreviewIn):
     jpg = media.preview_frame(lid, body.t, _style_data(body.style, body.style_data),
                               body.title, body.zoom, body.captions, body.harakat, body.caption_lang,
-                              body.quran_tag)
+                              body.quran_tag, body.caption_lang2)
     return Response(jpg, media_type="image/jpeg")
 
 
@@ -686,6 +708,35 @@ def update_short(lid: str, sid: str, body: ShortIn):
     s = store.get_short(lid, sid)
     s.update(body.model_dump(), updated=time.time())
     return _short_out(store.save_short(s))
+
+
+@app.post("/api/lectures/{lid}/shorts/{sid}/captions")
+def short_captions(lid: str, sid: str, body: ShortIn | None = None):
+    """The captions the render will burn in, word for word, with their times.
+    `body`: the editor's current (maybe not yet saved) settings."""
+    from shorts.pipeline import caption_list
+
+    s = store.get_short(lid, sid)
+    if body is not None:
+        s = {**s, **body.model_dump()}
+    if not s["ranges"]:
+        return {"captions": [], "editable": False}
+    return caption_list(store.source_path(lid), _options(store.get_lecture(lid), s))
+
+
+class CaptionEditsIn(BaseModel):
+    starts: list[float] = Field(default_factory=list)  # a caption begins at the word starting here
+    joins: list[float] = Field(default_factory=list)   # never begin a caption at the word starting here
+    times: dict[str, list[float]] = Field(default_factory=dict)  # caption's first word -> [start, end], lecture time
+
+
+@app.put("/api/lectures/{lid}/shorts/{sid}/captions")
+def set_short_captions(lid: str, sid: str, body: CaptionEditsIn):
+    """This short's own caption splits, joins and timing."""
+    s = store.get_short(lid, sid)
+    s["caption_edits"] = body.model_dump()
+    store.save_short(s)
+    return short_captions(lid, sid)
 
 
 @app.delete("/api/lectures/{lid}/shorts/{sid}")

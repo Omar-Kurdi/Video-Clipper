@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, defaultSettings, type Cameras, type Estimate, type Job, type Lecture, type Range, type Short,
+  api, defaultSettings, type Caption, type CaptionEdits, type SubCaption, type Cameras, type Estimate, type Job, type Lecture, type Range, type Short,
   type ShortSettings, type Styles, type Transcript, type Translation,
 } from "./api";
 import { Confirm } from "./Confirm";
@@ -60,6 +60,10 @@ export interface Ed {
   missingWord: (i: number, add: boolean) => Promise<void>;
   time: number;
   setTime: (t: number) => void;
+  /** the captions the render will show, word for word (null while loading) */
+  captions: { captions: Caption[]; editable: boolean; sub?: SubCaption[] } | null;
+  setCaptionEdits: (e: CaptionEdits) => Promise<void>;
+  editCaptionText: (i0: number, i1: number, text: string) => Promise<boolean>;
 }
 
 const settingsOf = (s: Short): ShortSettings => ({
@@ -67,7 +71,14 @@ const settingsOf = (s: Short): ShortSettings => ({
   min_gap: s.min_gap, transition: s.transition, transition_frames: s.transition_frames,
   zoom: s.zoom, grade: s.grade, captions: s.captions, speed: s.speed ?? 1, harakat: s.harakat ?? "all",
   caption_lang: s.caption_lang ?? "original", quran_tag: s.quran_tag ?? true,
+  follow: s.follow ?? "main", post: s.post ?? null,
+  even_volume: s.even_volume ?? true, fit_to: s.fit_to ?? null, caption_lang2: s.caption_lang2 ?? null,
 });
+
+/** The speed the short is exported at: the one "Fit into" chose, else the export speed. */
+export const exportSpeed = (ed: Ed) => ed.estimate?.fit?.speed ?? ed.short?.speed ?? 1;
+/** The finished short's length, in seconds. */
+export const finalLength = (ed: Ed) => ed.estimate?.fit?.final ?? (ed.estimate?.duration ?? 0) / (ed.short?.speed ?? 1);
 
 export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: Mode; shortId?: string }) {
   const [lecture, setLecture] = useState<Lecture | null>(null);
@@ -180,7 +191,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   }, [debouncedKey]);
 
   // estimate follows the cut-relevant settings only
-  const estKey = current ? JSON.stringify([current.ranges, current.min_gap, current.transition_frames]) : "";
+  const estKey = current ? JSON.stringify([current.ranges, current.min_gap, current.transition_frames, current.fit_to, current.speed]) : "";
   const debouncedEst = useDebounced(estKey, 400);
   useEffect(() => {
     if (!current) return;
@@ -190,6 +201,19 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedEst, lectureId]);
+
+  // the caption list follows everything that changes what the render shows
+  const [captions, setCaptions] = useState<Ed["captions"]>(null);
+  const [captionsVersion, setCaptionsVersion] = useState(0);
+  const debouncedCaps = useDebounced(settingsKey, 400);
+  useEffect(() => {
+    if (!current || !debouncedCaps) return;
+    let live = true;
+    api.captions(lectureId, current.id, JSON.parse(debouncedCaps))
+      .then((c) => live && setCaptions(c)).catch(() => live && setCaptions(null));
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedCaps, current?.id, transcript, captionsVersion, lectureId]);
 
   const ed = useMemo<Ed | null>(() => {
     if (!lecture) return null;
@@ -248,7 +272,8 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       setFramingAt: async (t, x) => {
         const cam = await api.setFramingAt(lectureId, t, x).catch((e) => { setError(e.message); return null; });
         if (!cam) return;
-        setCameras((c) => c && { ...c, cameras: c.cameras.map((y) => (y.id === cam.id ? cam : y)) });
+        setCameras((c) => c && { ...c, cameras: c.cameras.some((y) => y.id === cam.id)
+          ? c.cameras.map((y) => (y.id === cam.id ? cam : y)) : [...c.cameras, cam] });  // a new angle for a cutaway
         setFramingVersion((v) => v + 1);
       },
       setCameraZoom: async (cid, zoom) => {
@@ -275,9 +300,21 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
         const t = await api.missingWord(lectureId, i, add).catch((e) => { setError(e.message); return null; });
         if (t) setTranscript(t);
       },
+      captions,
+      setCaptionEdits: async (e) => {
+        if (!current) return;
+        setShorts((l) => l.map((s) => (s.id === current.id ? { ...s, caption_edits: e } : s)));
+        await api.setCaptionEdits(lectureId, current.id, e).catch((err) => setError(err.message));
+        setCaptionsVersion((v) => v + 1);
+      },
+      editCaptionText: async (i0, i1, text) => {
+        const t = await api.editWords(lectureId, i0, i1, text).catch((e) => { setError(e.message); return null; });
+        if (t) setTranscript(t);
+        return !!t;
+      },
     };
   }, [lecture, visible, shorts, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
-    renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang, gemini]);
+    renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang, gemini, captions]);
 
   if (error && !lecture) return <div className="fatal"><p>{error}</p><a href="#/">Back to library</a></div>;
   if (!ed) return <div className="fatal"><p>Loading…</p></div>;
@@ -319,7 +356,7 @@ export function TopBar({ ed }: { ed: Ed }) {
         </nav>
         <span className="grow" />
         {failed && <span className="bad" title={failed.message}>Last render failed: {failed.message}</span>}
-        {n > 0 && <span className="tc small dim">{n} clip{n === 1 ? "" : "s"}{e ? ` · ${fmt(e.duration / (short?.speed ?? 1), 0)} after cuts` : ""}</span>}
+        {n > 0 && <span className="tc small dim">{n} clip{n === 1 ? "" : "s"}{e ? ` · ${fmt(finalLength(ed), 0)} after cuts` : ""}</span>}
         <RenderButton ed={ed} />
       </header>
       {deleting && short && (
@@ -344,7 +381,7 @@ export function RenderButton({ ed }: { ed: Ed }) {
       </div>
     );
   }
-  const dur = (ed.estimate?.duration ?? 0) / (ed.short?.speed ?? 1);
+  const dur = finalLength(ed);
   return (
     <span className="render-wrap">
       <button type="button" className="btn primary" disabled={!ed.short?.ranges.length}

@@ -56,14 +56,36 @@ def _atempo(speed: float) -> str:
     return ",".join(stages)
 
 
+LOUDNESS = -14.0  # LUFS: what YouTube, TikTok and Instagram play shorts back at
+
+
+def _loudnorm(cut: Path, target: float) -> str:
+    """A loudnorm filter that brings the cut's audio to `target` LUFS evenly
+    (measured first, then one gain for the whole short: no pumping)."""
+    import json
+    import re
+
+    err = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(cut), "-vn",
+                          "-af", f"loudnorm=I={target}:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"],
+                         capture_output=True, text=True).stderr
+    m = json.loads(re.findall(r"\{[^{}]*\}", err)[-1])
+    if float(m["input_i"]) < -70:  # silence: nothing to level
+        return ""
+    return (f"loudnorm=I={target}:TP=-1.5:LRA=11:measured_I={m['input_i']}:measured_TP={m['input_tp']}"
+            f":measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}"
+            ":linear=true,aresample=48000")
+
+
 def render_vertical(cut: Path, path: CropPath, fps: Fraction, windows: dict[int, str], d: int,
                     overlay: Overlay | None, out: Path, grade: bool, on_frame=None,
-                    speed: float = 1.0) -> None:
+                    speed: float = 1.0, loudness: float | None = None) -> None:
     vf = ["setsar=1"] + ([GRADE] if grade else [])
     if abs(speed - 1.0) > 1e-3:
         vf.append(f"setpts=PTS/{speed:.4f}")
     vf.append("format=yuv420p")
-    audio = ["-af", _atempo(speed), "-shortest"] if abs(speed - 1.0) > 1e-3 else []
+    af = [f for f in (_atempo(speed) if abs(speed - 1.0) > 1e-3 else "",
+                      _loudnorm(cut, loudness) if loudness is not None else "") if f]
+    audio = (["-af", ",".join(af)] if af else []) + (["-shortest"] if abs(speed - 1.0) > 1e-3 else [])
     cmd = ["ffmpeg", "-v", "error", "-stats", "-y",
            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{OUT_W}x{OUT_H}", "-r", str(fps), "-i", "-",
            "-i", str(cut), "-map", "0:v", "-map", "1:a",

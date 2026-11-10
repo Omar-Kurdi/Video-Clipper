@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Range } from "./api";
+import type { Caption, Range } from "./api";
 import { clamp, fmt, pausesIn } from "./util";
 
 interface Props {
@@ -14,6 +14,12 @@ interface Props {
   onView: (v: Range) => void;
   onSeek: (t: number) => void;
   onSelect: (r: Range | null) => void;
+  /** the short's captions, shown as a track under the waveform (lecture time) */
+  captions?: Caption[];
+  captionKey?: number | null;
+  onCaption?: (c: Caption) => void;
+  onCaptionOpen?: (c: Caption) => void;
+  onCaptionTime?: (c: Caption, r: Range) => void;
 }
 
 // the editor's inks (see styles.css): red is what's in the short, hatching is a selection not added yet
@@ -287,12 +293,58 @@ export function Timeline(p: Props) {
     if (d && !d.moved && d.inBox) p.onSeek(d.t);
   };
 
+  // ----- caption track: click to pick, double-click to edit, drag an edge to retime -----
+  const [capDrag, setCapDrag] = useState<{ key: number; edge: 0 | 1; r: Range } | null>(null);
+  const capRef = useRef(capDrag);
+  capRef.current = capDrag;
+  const shown = (p.captions ?? []).filter((c) => c.src[1] >= v0 && c.src[0] <= v1);
+
   return (
     <div ref={wrap} className="timeline">
       <canvas ref={over} className="overview" aria-label="Whole video overview"
         onPointerDown={overDown} onPointerMove={overMove} onPointerUp={overUp} />
       <canvas ref={main} className="wave" aria-label="Timeline: drag to select, click to seek, drag along the times at the top to scrub, Ctrl+scroll to zoom"
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />
+      {!!p.captions?.length && (
+        <div className="cap-track" aria-label="Captions: click to pick, double-click to edit, drag an edge to change when it shows">
+          {shown.map((c, n) => {
+            const r = capDrag?.key === c.key ? capDrag.r : c.src;
+            const left = xOf(r[0]), width = Math.max(4, xOf(r[1]) - xOf(r[0]));
+            const grab = (edge: 0 | 1) => (e: React.PointerEvent<HTMLSpanElement>) => {
+              e.stopPropagation();
+              try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+              setCapDrag({ key: c.key, edge, r: [...c.src] as Range });
+            };
+            const move = (e: React.PointerEvent<HTMLSpanElement>) => {
+              const d = capRef.current;
+              if (!d || d.key !== c.key) return;
+              const box = (e.currentTarget.closest(".cap-track") as HTMLElement).getBoundingClientRect();
+              const t = clamp(tOf(e.clientX - box.left), 0, p.duration);
+              // stay between the neighbours: two captions never show at once
+              const all = p.captions ?? [];
+              const k = all.findIndex((x) => x.key === c.key);
+              const lo = k > 0 ? all[k - 1].src[1] : 0, hi = k + 1 < all.length ? all[k + 1].src[0] : p.duration;
+              const nr: Range = d.edge === 0 ? [clamp(t, lo, d.r[1] - 0.2), d.r[1]] : [d.r[0], clamp(t, d.r[0] + 0.2, hi)];
+              setCapDrag({ ...d, r: nr });
+            };
+            const drop = () => {
+              const d = capRef.current;
+              setCapDrag(null);
+              if (d && d.key === c.key && (d.r[0] !== c.src[0] || d.r[1] !== c.src[1])) p.onCaptionTime?.(c, d.r);
+            };
+            return (
+              <div key={`${c.key}-${n}`} className={`cap-block ${c.key === p.captionKey ? "sel" : ""} ${c.timed ? "timed" : ""}`}
+                style={{ left, width }} dir="auto" title={c.words.map((w) => w.w).join(" ")}
+                onClick={() => p.onCaption?.(c)} onDoubleClick={() => p.onCaptionOpen?.(c)}>
+                <span className="cap-edge l" onPointerDown={grab(0)} onPointerMove={move} onPointerUp={drop} />
+                <span className="cap-words">{c.words.map((w) => w.w).join(" ")}</span>
+                <span className="cap-edge r" onPointerDown={grab(1)} onPointerMove={move} onPointerUp={drop} />
+              </div>
+            );
+          })}
+          <i className="cap-head" style={{ left: xOf(p.time) }} />
+        </div>
+      )}
     </div>
   );
 }

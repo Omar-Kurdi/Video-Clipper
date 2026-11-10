@@ -336,6 +336,28 @@ class Locator:
         return None
 
 
+def add_angle(data: dict, frame: np.ndarray, thumbs: Path | None = None) -> dict:
+    """A new camera angle with this frame as its reference: for a shot the
+    analysis never sampled (a short cutaway), so the user can frame it by hand.
+    Later frames of that shot are found by the same feature matching."""
+    gw, gh = data["geo"]
+    small = cv2.resize(frame, (gw, gh), interpolation=cv2.INTER_AREA)
+    kp, des = _features(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY))
+    cid = max((c["id"] for c in data["cameras"]), default=-1) + 1
+    path = Path(data["_features"])
+    arrays = dict(np.load(path))
+    arrays[f"kp{cid}"] = np.float32([k.pt for k in kp]) if kp else np.zeros((0, 2), np.float32)
+    arrays[f"des{cid}"] = des if des is not None else np.zeros((0, 32), np.uint8)
+    np.savez_compressed(path, **arrays)
+    cam = {"id": cid, "sigs": [[int(v) for v in signature(frame).round().flatten()]], "count": 1, "share": 0.0,
+           "has_speaker": False, "auto": None, "manual": None, "zoom": None, "added": True}
+    data["cameras"].append(cam)
+    if thumbs is not None:
+        thumbs.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(thumbs / f"cam{cid}.jpg"), small, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return cam
+
+
 _locators: dict = {}
 
 

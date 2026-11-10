@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type Range, type TextStyle, type Transcript, type Translation, type Word } from "./api";
-import type { Ed } from "./Editor";
+import { api, type TextStyle, type Word } from "./api";
+import { exportSpeed, type Ed } from "./Editor";
 import { effectiveCaption } from "./panels";
 import { rememberVolume, VolumeControl } from "./Volume";
 import { clamp, fmt } from "./util";
@@ -39,39 +39,6 @@ export function at(track: Track, t: number): [number, number] {
   if (c0 !== c1) return t - t0 < t1 - t ? [x0, y0] : [x1, y1];
   const f = (t - t0) / (t1 - t0 || 1);
   return [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f];
-}
-
-/** Translated sentences as caption words: each sentence's words share its
- * time span by length (same as the server's translate.timed_words). */
-function translatedWords(tr: Transcript, t: Translation): Word[] {
-  const out: Word[] = [];
-  tr.segments.forEach((g, k) => {
-    const toks = (t.segments[k]?.text ?? "").split(/\s+/).filter(Boolean);
-    const total = toks.reduce((a, w) => a + w.length + 1, 0);
-    let at = g.s;
-    for (const w of toks) {
-      const dur = ((g.e - g.s) * (w.length + 1)) / total;
-      out.push({ w, s: at, e: at + dur * 0.95 });
-      at += dur;
-    }
-  });
-  return out;
-}
-
-function chunks(words: Word[], ranges: Range[], ts: TextStyle): Word[][] {
-  const inside = words.filter((w) => ranges.some(([a, b]) => w.e > a && w.s < b));
-  const out: Word[][] = [];
-  let cur: Word[] = [];
-  for (const w of inside) {
-    const text = [...cur, w].map((x) => x.w).join(" ");
-    if (cur.length && (cur.length >= ts.max_words || text.length > ts.max_chars || w.s - cur[cur.length - 1].e > 0.3)) {
-      out.push(cur);
-      cur = [];
-    }
-    cur.push(w);
-  }
-  if (cur.length) out.push(cur);
-  return out;
 }
 
 const rtl = (s: string) => /[֐-ࣿיִ-ﻼ]/.test(s);
@@ -132,7 +99,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   const fade = s.transition === "cut" ? 0 : s.transition_frames / fps;
   // preview speed: follows the export speed unless picked here (watching only)
   const [rateChoice, setRateChoice] = useState<number | null>(null);
-  const rate = rateChoice ?? (s.speed ?? 1);
+  const rate = rateChoice ?? exportSpeed(ed);
   const W = ed.lecture.width ?? 1920, H = ed.lecture.height ?? 1080;
 
   const v0 = useRef<HTMLVideoElement>(null), v1 = useRef<HTMLVideoElement>(null);
@@ -150,16 +117,15 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   const total = segs.reduce((acc, [a, b]) => acc + (b - a), 0) - fade * Math.max(0, segs.length - 1);
   const capStyle = effectiveCaption(ed);
   const titleStyle = effectiveCaption(ed, "title");
-  const capChunks = useMemo(() => {
-    if (!capStyle || !ed.transcript || !s.captions) return [];
-    const lang = s.caption_lang ?? "original";
-    if (lang !== "original") return ed.translation?.lang === lang ? chunks(translatedWords(ed.transcript, ed.translation), s.ranges, capStyle) : [];
-    const h = s.harakat ?? "all";
-    const strip = (t: string) => t.replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, "");
-    const words = h === "all" ? ed.transcript.words
-      : ed.transcript.words.map((w) => (h === "quran" && w.quran ? w : { ...w, w: strip(w.w) }));
-    return chunks(words, s.ranges, capStyle);
-  }, [ed.transcript, ed.translation, s.ranges, s.captions, s.harakat, s.caption_lang, capStyle?.max_words, capStyle?.max_chars]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the captions the render will burn in (from the server, so the two always match)
+  const capChunks = useMemo<Word[][]>(() => {
+    if (!s.captions || !ed.captions) return [];
+    return ed.captions.captions.map((c) => c.words.map((w, k) => ({
+      w: w.w,
+      s: c.timed && k === 0 ? c.src[0] : w.t,
+      e: c.timed && k === c.words.length - 1 ? c.src[1] : w.e,
+    } as Word)));
+  }, [ed.captions, s.captions]);
 
   const place = (v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -291,6 +257,8 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
   // captions at the current source time
   const chunkIdx = capChunks.findIndex((c, i) => c[0].s <= srcT && srcT < (capChunks[i + 1]?.[0].s ?? Infinity) && srcT < c[c.length - 1].e + 0.3);
   const chunk = chunkIdx >= 0 ? capChunks[chunkIdx] : null;
+  const subs = s.captions ? ed.captions?.sub ?? [] : [];
+  const sub = subs.find((c, i) => c.src[0] <= srcT && srcT < Math.max(c.src[1] + 0.3, Math.min(subs[i + 1]?.src[0] ?? Infinity, c.src[1] + 0.3))) ?? null;
   const k = width / 1080;
   // surah/ayah tag while a Quran verse is quoted (as in the render)
   // (only with captions, as in the render; one ayah at a time, following the recitation)
@@ -323,6 +291,13 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
             ))}
           </div>
         )}
+        {sub && capStyle && (() => {
+          // the second line (a translation), under the caption as in the render
+          const ss = { ...capStyle, size: Math.max(30, Math.round(capStyle.size * 0.6)), pad_x: Math.max(10, Math.round(capStyle.pad_x * 0.8)),
+            pad_y: Math.max(6, Math.round(capStyle.pad_y * 0.7)) };
+          const below = (capStyle.size * 1.5 + 2 * capStyle.pad_y) / 2 + (ss.size * 1.5 + 2 * ss.pad_y) / 2 + 8;
+          return <div className="q-cap" dir="auto" style={{ ...textCss(ss, k), top: `calc(${capStyle.y * 100}% + ${below * k}px)` }}>{sub.text}</div>;
+        })()}
         {qSpan && capStyle && (
           <div className="q-cap q-tag" dir={tagLang === "ar" ? "rtl" : "ltr"} style={{
             top: `calc(${capStyle.y * 100}% - ${(capStyle.size * 0.95 + capStyle.pad_y + 30) * k}px)`,
@@ -349,8 +324,8 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
         <span className="tc small" title={note}>{fmt(outT, 1)} / {fmt(total, 1)}</span>
       </div>
       <div className="q-bar">
-        <SpeedPicker value={rate} onChange={(r) => setRateChoice(r === (s.speed ?? 1) ? null : r)}
-          note={rateChoice == null && (s.speed ?? 1) !== 1 ? "export speed" : rateChoice != null ? "preview only" : undefined} />
+        <SpeedPicker value={rate} onChange={(r) => setRateChoice(r === exportSpeed(ed) ? null : r)}
+          note={rateChoice == null && exportSpeed(ed) !== 1 ? "export speed" : rateChoice != null ? "preview only" : undefined} />
         <VolumeControl getMedia={() => [v0.current, v1.current]} />
       </div>
       {segs.length > 1 && (

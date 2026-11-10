@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .plan import Segment, output_starts
 
-Word = tuple[str, float, float]  # text, start, end (output seconds)
+Word = tuple  # text, start, end (output seconds)[, transcript index, lecture start, lecture end]
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,7 @@ class TextStyle:
     y: float = 0.52                 # vertical centre, fraction of frame height (above every app's bottom bar)
     max_words: int = 3
     max_chars: int = 22
+    max_seconds: float = 0.0        # longest a caption stays up (0: no limit); longer ones are split
     fade_ms: int = 90
 
 
@@ -97,8 +98,12 @@ TAG_STYLE = TextStyle(size=32, color="#FFD54A", box=False, shadow=6, outline=0, 
 TAG_FADE = 0.25
 
 
-def map_words(words: list[dict], segs: list[Segment], fps: Fraction, d: int) -> list[Word]:
-    """Each word goes to the segment it overlaps most, clipped to that segment."""
+def map_words(words: list[dict], segs: list[Segment], fps: Fraction, d: int,
+              keep_all: bool = False) -> list[Word]:
+    """Each word goes to the segment it overlaps most, clipped to that segment.
+    With `keep_all` (the words are already the ones the user chose), a word that
+    lands in a removed pause, or has no length, goes to the nearest cut instead
+    of being dropped: the transcript is what the captions must show."""
     starts = output_starts(segs, d)
     bounds = [(float(s.f0 / fps), float(s.f1 / fps)) for s in segs]
     out = []
@@ -108,21 +113,51 @@ def map_words(words: list[dict], segs: list[Segment], fps: Fraction, d: int) -> 
             ov = min(b, w["e"]) - max(a, w["s"])
             if ov > best_ov:
                 best, best_ov = i, ov
+        if best is None and keep_all and bounds:
+            mid = (w["s"] + w["e"]) / 2
+            best = min(range(len(bounds)), key=lambda i: max(bounds[i][0] - mid, mid - bounds[i][1], 0))
+            a, b = bounds[best]
+            t = float(starts[best] / fps) + min(max(mid, a), b) - a
+            out.append((w["w"], t, t, w.get("_i"), w["s"], w["e"]))
+            continue
         if best is None:
             continue
         a, b = bounds[best]
         base = float(starts[best] / fps)
-        out.append((w["w"], base + max(w["s"], a) - a, base + min(w["e"], b) - a))
+        out.append((w["w"], base + max(w["s"], a) - a, base + min(w["e"], b) - a, w.get("_i"), w["s"], w["e"]))
     out.sort(key=lambda x: x[1])
     return out
 
 
-def chunk(mapped: list[Word], ts: TextStyle, break_gap: float = 0.3) -> list[list[Word]]:
+def to_output(t: float, segs: list[Segment], fps: Fraction, d: int) -> float:
+    """A lecture time in output seconds (a time in a removed pause goes to the nearest cut)."""
+    starts = output_starts(segs, d)
+    bounds = [(float(s.f0 / fps), float(s.f1 / fps)) for s in segs]
+    k = min(range(len(bounds)), key=lambda i: max(bounds[i][0] - t, t - bounds[i][1], 0))
+    a, b = bounds[k]
+    return float(starts[k] / fps) + min(max(t, a), b) - a
+
+
+def word_key(w) -> float:
+    """How a caption word is named in a short's caption edits: its start in the
+    lecture. Indices shift when a sentence gains or loses words; times don't."""
+    return round(w[4], 2)
+
+
+def chunk(mapped: list[Word], ts: TextStyle, break_gap: float = 0.3,
+          starts: set | None = None, joins: set | None = None) -> list[list[Word]]:
+    """Words into captions. `starts`/`joins` (word keys, see word_key) are the
+    user's own splits: a word in `starts` always begins a caption, one in
+    `joins` never does."""
+    starts, joins = starts or set(), joins or set()
     chunks, cur = [], []
     for w in mapped:
-        if cur and (len(cur) >= ts.max_words
-                    or len(" ".join(x[0] for x in cur + [w])) > ts.max_chars
-                    or w[1] - cur[-1][2] > break_gap):
+        key = word_key(w) if len(w) > 4 else None
+        if cur and key in starts or cur and key not in joins and (
+                len(cur) >= ts.max_words
+                or len(" ".join(x[0] for x in cur + [w])) > ts.max_chars
+                or (ts.max_seconds > 0 and w[2] - cur[0][1] > ts.max_seconds)
+                or w[1] - cur[-1][2] > break_gap):
             chunks.append(cur)
             cur = []
         cur.append(w)
@@ -257,38 +292,64 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
     return np.asarray(img)
 
 
+def sub_style(ts: TextStyle) -> TextStyle:
+    """The second caption line (a translation under the original): smaller,
+    longer lines, no word highlight."""
+    return replace(ts, size=max(30, int(ts.size * 0.6)), max_words=7, max_chars=42, max_seconds=0,
+                   highlight=None, pad_x=max(10, int(ts.pad_x * 0.8)), pad_y=max(6, int(ts.pad_y * 0.7)))
+
+
+def _windows(chunks: list[list[Word]]) -> tuple[list[float], list[float]]:
+    """When each chunk shows: held until the next one if the gap is short."""
+    starts, ends = [c[0][1] for c in chunks], []
+    for i, c in enumerate(chunks):
+        end = c[-1][2]
+        if i + 1 < len(chunks) and chunks[i + 1][0][1] - end < 0.3:
+            end = chunks[i + 1][0][1]
+        ends.append(end)
+    return starts, ends
+
+
 class Overlay:
     """Per-frame caption + title compositor for a 1080x1920 BGR frame."""
 
     def __init__(self, chunks: list[list[Word]], style: Style, title: str | None,
-                 tags: list[tuple[float, float, str]] | None = None):
+                 tags: list[tuple[float, float, str]] | None = None, sub: list[list[Word]] | None = None):
         """tags: (start, end, text) shown small above the captions, e.g. the
-        surah and ayah while a Quran verse is quoted."""
+        surah and ayah while a Quran verse is quoted. sub: a second caption
+        line under the first (a translation), in sub_style."""
         self.chunks = chunks
         self.style = style
         self.tags = tags or []
-        self.starts = [c[0][1] for c in chunks]
-        # hold each chunk until the next starts if the gap is short
-        self.ends = []
-        for i, c in enumerate(chunks):
-            end = c[-1][2]
-            if i + 1 < len(chunks) and chunks[i + 1][0][1] - end < 0.3:
-                end = chunks[i + 1][0][1]
-            self.ends.append(end)
+        self.starts, self.ends = _windows(chunks)
+        self.sub = sub or []
+        self.sub_style = sub_style(style.captions)
+        self.sub_starts, self.sub_ends = _windows(self.sub)
         self.title = render_text(tuple(title.split()), style.title) if title else None
         self._cache: dict = {}
 
-    def _caption(self, t: float):
-        for i, (s, e) in enumerate(zip(self.starts, self.ends)):
+    def _line(self, name, chunks, starts, ends, ts: TextStyle, t: float):
+        for i, (s, e) in enumerate(zip(starts, ends)):
             if s <= t < e:
-                c = self.chunks[i]
+                c = chunks[i]
                 active = max((k for k, w in enumerate(c) if w[1] <= t), default=0)
-                key = (i, active if self.style.captions.highlight else -1)
+                key = (name, i, active if ts.highlight else -1)
                 if key not in self._cache:
-                    self._cache[key] = render_text(tuple(w[0] for w in c), self.style.captions, key[1])
-                fade = self.style.captions.fade_ms / 1000
+                    self._cache[key] = render_text(tuple(w[0] for w in c), ts, key[2])
+                fade = ts.fade_ms / 1000
                 return self._cache[key], min(1.0, (t - s) / fade) if fade else 1.0
         return None, 0.0
+
+    def _caption(self, t: float):
+        return self._line("cap", self.chunks, self.starts, self.ends, self.style.captions, t)
+
+    def _sub_offset(self) -> float:
+        """Pixels from the caption's centre down to the second line's centre."""
+        if "sub_off" not in self._cache:
+            cap_h = render_text(("كلمة",), self.style.captions).shape[0]
+            sub_h = render_text(("Word",), self.sub_style).shape[0]
+            self._cache["sub_off"] = cap_h / 2 + sub_h / 2 + 8
+        return self._cache["sub_off"]
 
     @staticmethod
     def _blit(frame: np.ndarray, rgba: np.ndarray, cy: float, alpha: float) -> None:
@@ -329,3 +390,7 @@ class Overlay:
         img, alpha = self._caption(t)
         if img is not None:
             self._blit(frame, img, self.style.captions.y, alpha)
+        if self.sub:
+            img, alpha = self._line("sub", self.sub, self.sub_starts, self.sub_ends, self.sub_style, t)
+            if img is not None:
+                self._blit(frame, img, self.style.captions.y + self._sub_offset() / frame.shape[0], alpha)
