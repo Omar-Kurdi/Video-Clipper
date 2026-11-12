@@ -6,7 +6,7 @@ import { CaptionTextPanel, CaptionsPanel, ClipStrip, captionEdit, ExportPanel, F
 import { VolumeControl } from "./Volume";
 import { SpeedPicker, at, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
-import { clamp, fmt, normalize } from "./util";
+import { clamp, fmt, normalize, storage, store } from "./util";
 
 const SECTIONS: Section[] = ["pauses", "look", "text", "framing", "export", "post"];
 const SECTION_NAME: Record<Section, string> = { pauses: "Pauses", look: "Captions & look", text: "Caption text", framing: "Framing", export: "Export", post: "Post" };
@@ -20,6 +20,9 @@ const SECTION_ICON: Record<Section, string> = {
   post: "m22 2-7 20-4-9-9-4zM22 2 11 13",
 };
 const SECTION_KEY = "settings-section";
+const WORD_LEN_KEY = "word-lengths";
+/** A word said for this long (seconds) or longer is drawn-out: its bar is full width and marked. */
+const LONG_WORD = 1;
 const PREVIEW_KEY = "preview-hidden";
 
 function storedSection(): Section {
@@ -79,6 +82,7 @@ export function Workspace({ ed }: { ed: Ed }) {
   const [rate, setRate] = useState(1);
   useEffect(() => { if (video.current) { video.current.playbackRate = rate; video.current.preservesPitch = true; } }, [rate]);
   const stopAt = useRef<number | null>(null);
+  const [keysOpen, setKeysOpen] = useState(false);
 
   // ----- playback -----
   useEffect(() => {
@@ -156,7 +160,16 @@ export function Workspace({ ed }: { ed: Ed }) {
     const on = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (el.closest("input, textarea, select, [contenteditable]")) return;
-      if (e.key === " ") { e.preventDefault(); toggle(); }
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        // undo and redo only: Ctrl+I, Ctrl+O and the rest stay the browser's
+        const k = e.key.toLowerCase();
+        if (e.altKey || (k !== "z" && k !== "y")) return;
+        e.preventDefault();
+        if (k === "y" || e.shiftKey) ed.redo(); else ed.undo();
+        return;
+      }
+      if (e.key === "?") { e.preventDefault(); setKeysOpen((v) => !v); }
+      else if (e.key === " ") { e.preventDefault(); toggle(); }
       else if (e.key === "i" || e.key === "I") markIn();
       else if (e.key === "o" || e.key === "O") markOut();
       else if (e.key === "Enter") add();
@@ -260,6 +273,7 @@ export function Workspace({ ed }: { ed: Ed }) {
             <span className="grow" />
             <button type="button" className="btn small" title="Mark in (I): start the selection here" onClick={markIn}><kbd>I</kbd> In</button>
             <button type="button" className="btn small" title="Mark out (O): end the selection here" onClick={markOut}><kbd>O</kbd> Out</button>
+            <Shortcuts open={keysOpen} onOpen={setKeysOpen} />
           </div>
         </section>
 
@@ -343,6 +357,8 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
   const [follow, setFollow] = useState(true);
   const [showTr, setShowTr] = useState(true);
   const [showDoubt, setShowDoubt] = useState(true);
+  const [showLen, setShowLenState] = useState(() => storage(WORD_LEN_KEY, false));
+  const setShowLen = (v: boolean) => { setShowLenState(v); store(WORD_LEN_KEY, v); };
   const [editingTr, setEditingTr] = useState<number | null>(null);
   const [trDraft, setTrDraft] = useState("");
   const [editing, setEditing] = useState<number | null>(null);
@@ -508,7 +524,13 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
           : showDoubt && w.flag === "voted" ? `Changed: two recognisers agreed on this; the first reading was ${(w.alts ?? []).join(" / ")}. Click to check`
           : showDoubt && w.flag === "gemini" ? `Changed by Gemini (${w.why ?? "proofreading"}); was ${(w.alts ?? [])[0] ?? "?"}`
           : undefined;
-        parts.push(<span key={i} data-i={i} className={(fixing === i ? `${cls} fixing` : cls) || undefined} title={fixing === i ? undefined : tip}>{w.w}</span>);
+        // how long the word is said: a bar under it (full width at LONG_WORD seconds), the seconds on hover
+        const said = Math.max(0, w.e - w.s);
+        const len = showLen ? { "--len": `${Math.round(clamp(said / LONG_WORD, 0.08, 1) * 100)}%` } as CSSProperties : undefined;
+        const lenTip = showLen ? `Said in ${said.toFixed(2)} s` : undefined;
+        parts.push(<span key={i} data-i={i} style={len}
+          className={[fixing === i ? `${cls} fixing` : cls, showLen && said >= LONG_WORD ? "long" : ""].join(" ").trim() || undefined}
+          title={fixing === i ? undefined : tip && lenTip ? `${lenTip} · ${tip}` : tip ?? lenTip}>{w.w}</span>);
         if (w.missing) {
           parts.push(" ", <span key={`m${i}`} className="miss" onMouseUp={(e) => e.stopPropagation()}>
             <button type="button" dir="rtl" onClick={() => ed.missingWord(i, true)}
@@ -564,7 +586,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel, editing, draft, saving, marks, showTr, ed.translation, editingTr, trDraft, showDoubt, fixing]);
+  }, [tr, JSON.stringify(ranges), minGap, hitSet, sel, editing, draft, saving, marks, showTr, ed.translation, editingTr, trDraft, showDoubt, fixing, showLen]);
 
   const lang = tr?.language ?? ed.lecture.language ?? "ar";
   const rtl = ["ar", "fa", "ur", "he"].includes(lang);
@@ -611,6 +633,9 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
                   <span className="fl-doubt">Red</span>: likely wrong · <span className="fl-voted">amber</span>: changed by majority · <span className="fl-gemini">blue</span>: changed by Gemini. Hover a word to see what else was heard. Not every mistake is caught.
                 </span>
               )}
+              <label className="check" title="A bar under each word shows how long it is said; drawn-out words (a second or more) stand out. Hover a word for its seconds.">
+                <input type="checkbox" checked={showLen} onChange={(e) => setShowLen(e.target.checked)} />Show how long each word is said
+              </label>
               <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />Follow playback</label>
               <span className="view-key small">
                 <b>Click</b> a sentence to select · <b>Shift+click</b> to extend · <b>Double-click</b> to fix text{ed.translation && showTr ? " or translation" : ""}
@@ -619,7 +644,7 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
           </div>
           <TranscriptInfo ed={ed} />
           <Moments ed={ed} onSelect={onSelect} seek={seek} />
-          <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""}`} onMouseUp={onMouseUp}>
+          <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""} ${showLen ? "show-len" : ""}`} onMouseUp={onMouseUp}>
             {body}
           </article>
         </>
@@ -714,6 +739,49 @@ function SourceBadge({ src }: { src: import("./api").Source }) {
 }
 
 const LANG_NAME: Record<string, string> = { en: "English", ar: "Arabic" };
+
+const KEYS: [string, string][] = [
+  ["Space", "Play or pause"],
+  ["← →", "Back or forward 1 second (with Shift, 5)"],
+  ["I", "Start the selection at the playhead"],
+  ["O", "End the selection at the playhead"],
+  ["Enter", "Add the selection to the short"],
+  ["Esc", "Clear the selection"],
+  ["Ctrl+Z", "Undo a change to the short"],
+  ["Ctrl+Shift+Z", "Redo it"],
+  ["Ctrl+scroll", "Zoom the timeline (scroll alone moves it)"],
+  ["?", "Show or hide this list"],
+];
+
+/** Every keyboard shortcut, behind a small button beside the transport (or the ? key). */
+function Shortcuts({ open, onOpen }: { open: boolean; onOpen: (v: boolean) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onOpen(false); } };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc, true);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc, true); };
+  }, [open, onOpen]);
+  return (
+    <div className="view-menu keys-menu" ref={ref}>
+      <button type="button" className="btn small sq" aria-label="Keyboard shortcuts" aria-expanded={open} title="Keyboard shortcuts (?)"
+        onClick={() => onOpen(!open)}>?</button>
+      {open && (
+        <div className="view-pop keys-pop" role="dialog" aria-label="Keyboard shortcuts">
+          <b>Keyboard shortcuts</b>
+          <dl>
+            {KEYS.map(([k, what]) => (
+              <div key={k}><dt>{k.split("+").map((part, i) => <span key={part}>{i > 0 && " + "}<kbd>{part}</kbd></span>)}</dt><dd>{what}</dd></div>
+            ))}
+          </dl>
+          <span className="view-key small">They work anywhere except while typing in a text box. On a Mac, ⌘ works where Ctrl is listed.</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** The transcript's display options and how-to, folded into one menu. */
 function ViewMenu({ children }: { children: ReactNode }) {

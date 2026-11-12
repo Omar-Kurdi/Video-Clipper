@@ -252,7 +252,9 @@ export const api = {
   },
   shorts: (id: string) => req<Short[]>(`/api/lectures/${id}/shorts`),
   createShort: (id: string, s: ShortSettings) => req<Short>(`/api/lectures/${id}/shorts`, json(s)),
-  updateShort: (id: string, sid: string, s: ShortSettings) => req<Short>(`/api/lectures/${id}/shorts/${sid}`, json(s, "PUT")),
+  /** `leaving`: the page may be closing, so the request is allowed to finish after it has gone */
+  updateShort: (id: string, sid: string, s: ShortSettings, leaving = false) =>
+    req<Short>(`/api/lectures/${id}/shorts/${sid}`, { ...json(s, "PUT"), keepalive: leaving }),
   captions: (id: string, sid: string, s: ShortSettings) =>
     req<{ captions: Caption[]; editable: boolean; sub?: SubCaption[] }>(`/api/lectures/${id}/shorts/${sid}/captions`, json(s)),
   setCaptionEdits: (id: string, sid: string, e: CaptionEdits) =>

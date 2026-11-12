@@ -65,6 +65,12 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   the other readings (or keep it) in one click. The word keeps its timing.
   What's in the short is shown in red everywhere: transcript, 9:16 frame and
   timeline.
+  `Ctrl`+`Z` and `Ctrl`+`Shift`+`Z` undo and redo changes to the short (its
+  clips, settings, caption splits and timing; not corrections to the
+  transcript or framing set on a camera), and `?` lists every shortcut. Edits
+  are saved as you make them, including the last one before you leave. *View →
+  Show how long each word is said* draws a bar under every word, marked when
+  the word is drawn out for a second or more; hover a word for its seconds.
 - **Framing**: each video is analysed once. Camera angles are recognised
   by matching the architecture in the picture, so a moving audience, a pan or
   a small zoom doesn't split one angle into several. The main speaker is found by

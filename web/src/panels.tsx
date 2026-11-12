@@ -617,13 +617,7 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
               </select>
             </label>
           </div>
-          <button type="button" className="btn small" disabled={!s.style_data} onClick={async () => {
-            const name = prompt("Save this look as (letters, digits, - and _):", "my-style");
-            if (!name) return;
-            await api.saveStyle(name, effectiveData(ed));
-            ed.refreshStyles();
-            ed.update({ style: name, style_data: null });
-          }}>Save as my style</button>
+          <SaveStyle ed={ed} />
         </details>
       )}
       {!compact && <h4 className="group-head">Finish</h4>}
@@ -632,6 +626,42 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
         A punchier look. Shows in the rendered video only.
       </Help>
     </div>
+  );
+}
+
+/** Keep a customised look under a name, to use it in other shorts. The name is asked for here, not in a browser popup. */
+function SaveStyle({ ed }: { ed: Ed }) {
+  const [name, setName] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const customised = !!ed.short?.style_data;
+  if (name == null || !customised) {
+    return <button type="button" className="btn small" disabled={!customised}
+      title={customised ? undefined : "Change something in this look first"}
+      onClick={() => { setErr(null); setName("my-style"); }}>Save as my style</button>;
+  }
+  const ok = /^[A-Za-z0-9_-]{1,40}$/.test(name);
+  const replaces = !!ed.styles && name in ed.styles.custom;
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await api.saveStyle(name, effectiveData(ed));
+      ed.refreshStyles();
+      ed.update({ style: name, style_data: null });
+      setName(null);
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <form className="cap-edit style-save" onSubmit={(e) => { e.preventDefault(); if (ok && !busy) save(); }}>
+      <input autoFocus value={name} maxLength={40} aria-label="Name for this look" aria-invalid={!ok} disabled={busy} spellCheck={false}
+        onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setName(null); } }} />
+      <button type="submit" className="btn small primary" disabled={!ok || busy}>{busy ? "Saving…" : replaces ? "Replace" : "Save"}</button>
+      <button type="button" className="btn small" onClick={() => setName(null)}>Cancel</button>
+      <span className={`small ${err || !ok ? "err-text" : "muted"}`} role={err ? "alert" : undefined}>
+        {err ?? (!ok ? "Letters, digits, - and _ only, no spaces." : replaces ? `Replaces your style “${name}”.` : "Saved with your other styles, for any short.")}
+      </span>
+    </form>
   );
 }
 

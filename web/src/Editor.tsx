@@ -64,7 +64,17 @@ export interface Ed {
   captions: { captions: Caption[]; editable: boolean; sub?: SubCaption[] } | null;
   setCaptionEdits: (e: CaptionEdits) => Promise<void>;
   editCaptionText: (i0: number, i1: number, text: string) => Promise<boolean>;
+  /** step back or forward through this short's own changes: clips, settings, caption splits and timing */
+  undo: () => void;
+  redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 }
+
+/** A short as it was before a change: what undo puts back. */
+interface Past { settings: ShortSettings; edits: CaptionEdits | null }
+/** Changes to the same setting this close together are one step (a slider drag, a name being typed). */
+const SAME_STEP_MS = 800;
 
 const settingsOf = (s: Short): ShortSettings => ({
   name: s.name, ranges: s.ranges, title: s.title, style: s.style, style_data: s.style_data,
@@ -102,6 +112,33 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   const initialShort = useRef(shortId);
 
   const current = shorts.find((s) => s.id === shortId) ?? null;
+  const shortsRef = useRef(shorts);
+  shortsRef.current = shorts;
+
+  // Edits are saved half a second after the last one. Leaving sooner (another
+  // short, the library, closing the tab) used to drop them, so whatever is
+  // still waiting is sent on the way out; keepalive lets it outlive the page.
+  const flush = useCallback((id?: string) => {
+    for (const sid of id ? [id] : [...dirty.current]) {
+      const s = shortsRef.current.find((x) => x.id === sid);
+      if (!s || !dirty.current.delete(sid)) continue;
+      api.updateShort(lectureId, sid, settingsOf(s), true).catch(() => {});
+    }
+  }, [lectureId]);
+  useEffect(() => {
+    const leaving = () => flush();
+    window.addEventListener("pagehide", leaving);
+    return () => { window.removeEventListener("pagehide", leaving); flush(); };
+  }, [flush]);
+  const currentId = current?.id;
+  useEffect(() => () => { if (currentId) flush(currentId); }, [currentId, flush]);
+
+  // the tab says which short and video it holds
+  const tabTitle = lecture ? `${current ? `${current.name} · ` : ""}${lecture.title} · Video Clipper` : null;
+  useEffect(() => {
+    if (tabTitle) document.title = tabTitle;
+    return () => { document.title = "Video Clipper"; };
+  }, [tabTitle]);
   // empty drafts left from earlier visits aren't listed (they're reused for the next new short)
   const visible = shorts.filter((s) => !isEmpty(s) || s.id === current?.id);
   useEffect(() => {
@@ -175,11 +212,55 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   useInterval(pollJobs, busy ? 1000 : 6000);
 
   // ----- editing the current short (optimistic + debounced save) -----
+  // ----- undo / redo: each short keeps its own steps, for as long as the editor is open -----
+  const pastSteps = useRef(new Map<string, { undo: Past[]; redo: Past[] }>());
+  const lastStep = useRef({ id: "", what: "", at: 0 });
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const stepsOf = (id: string) => {
+    let h = pastSteps.current.get(id);
+    if (!h) pastSteps.current.set(id, (h = { undo: [], redo: [] }));
+    return h;
+  };
+  /** Keep the short as it is now, before `what` changes. */
+  const remember = useCallback((what: string) => {
+    const s = shortsRef.current.find((x) => x.id === currentId);
+    if (!s) return;
+    const now = Date.now();
+    const last = lastStep.current;
+    const sameStep = last.id === s.id && last.what === what && now - last.at < SAME_STEP_MS;
+    lastStep.current = { id: s.id, what, at: now };
+    if (sameStep) return;
+    const h = stepsOf(s.id);
+    h.undo.push({ settings: settingsOf(s), edits: s.caption_edits ?? null });
+    if (h.undo.length > 100) h.undo.shift();
+    h.redo = [];
+    setHistoryVersion((v) => v + 1);
+  }, [currentId]);
+
   const update = useCallback((patch: Partial<ShortSettings>) => {
     if (!current) return;
+    remember(Object.keys(patch).sort().join(","));
     dirty.current.add(current.id);
     setShorts((list) => list.map((s) => (s.id === current.id ? { ...s, ...patch } : s)));
-  }, [current]);
+  }, [current, remember]);
+
+  const [captionsVersion, setCaptionsVersion] = useState(0);
+  const step = useCallback((dir: "undo" | "redo") => {
+    const s = shortsRef.current.find((x) => x.id === currentId);
+    if (!s) return;
+    const h = stepsOf(s.id);
+    const to = (dir === "undo" ? h.undo : h.redo).pop();
+    if (!to) return;
+    (dir === "undo" ? h.redo : h.undo).push({ settings: settingsOf(s), edits: s.caption_edits ?? null });
+    lastStep.current = { id: "", what: "", at: 0 };
+    dirty.current.add(s.id);
+    setShorts((list) => list.map((x) => (x.id === s.id ? { ...x, ...to.settings, caption_edits: to.edits } : x)));
+    if (JSON.stringify(to.edits) !== JSON.stringify(s.caption_edits ?? null)) {
+      api.setCaptionEdits(lectureId, s.id, to.edits ?? { starts: [], joins: [], times: {} })
+        .then(() => setCaptionsVersion((v) => v + 1)).catch((e) => setError(e.message));
+    }
+    setHistoryVersion((v) => v + 1);
+  }, [currentId, lectureId]);
 
   const settingsKey = current ? JSON.stringify(settingsOf(current)) : "";
   const debouncedKey = useDebounced(settingsKey, 500);
@@ -204,7 +285,6 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
 
   // the caption list follows everything that changes what the render shows
   const [captions, setCaptions] = useState<Ed["captions"]>(null);
-  const [captionsVersion, setCaptionsVersion] = useState(0);
   const debouncedCaps = useDebounced(settingsKey, 400);
   useEffect(() => {
     if (!current || !debouncedCaps) return;
@@ -303,6 +383,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       captions,
       setCaptionEdits: async (e) => {
         if (!current) return;
+        remember(`captions:${Date.now()}`);
         setShorts((l) => l.map((s) => (s.id === current.id ? { ...s, caption_edits: e } : s)));
         await api.setCaptionEdits(lectureId, current.id, e).catch((err) => setError(err.message));
         setCaptionsVersion((v) => v + 1);
@@ -312,8 +393,12 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
         if (t) setTranscript(t);
         return !!t;
       },
+      undo: () => step("undo"),
+      redo: () => step("redo"),
+      canUndo: !!current && stepsOf(current.id).undo.length > 0,
+      canRedo: !!current && stepsOf(current.id).redo.length > 0,
     };
-  }, [lecture, visible, shorts, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
+  }, [step, historyVersion, lecture, visible, shorts, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
     renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang, gemini, captions]);
 
   if (error && !lecture) return <div className="fatal"><p>{error}</p><a href="#/">Back to library</a></div>;
@@ -356,6 +441,14 @@ export function TopBar({ ed }: { ed: Ed }) {
         </nav>
         <span className="grow" />
         {failed && <span className="bad" title={failed.message}>Last render failed: {failed.message}</span>}
+        <span className="undo-redo">
+          <button type="button" className="icon" aria-label="Undo" title="Undo (Ctrl+Z)" disabled={!ed.canUndo} onClick={ed.undo}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
+          </button>
+          <button type="button" className="icon" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled={!ed.canRedo} onClick={ed.redo}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" /></svg>
+          </button>
+        </span>
         {n > 0 && <span className="tc small dim">{n} clip{n === 1 ? "" : "s"}{e ? ` · ${fmt(finalLength(ed), 0)} after cuts` : ""}</span>}
         <RenderButton ed={ed} />
       </header>

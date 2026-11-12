@@ -484,6 +484,19 @@ details summary { cursor: pointer; font-weight: 500; }
   padding: 10px 12px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; box-shadow: 0 12px 30px rgba(0,0,0,0.45); }
 .view-key { color: var(--muted); line-height: 1.6; padding-bottom: 6px; }
 .view-key b { color: var(--fg-2); font-weight: 500; }
+/* keyboard shortcuts, beside the transport: opens upwards, over the video */
+.keys-pop { top: auto; bottom: calc(100% + 4px); width: 330px; gap: 8px; }
+.keys-pop dl { margin: 0; display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.keys-pop dl div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.keys-pop dt { white-space: nowrap; order: 2; }
+.keys-pop dd { margin: 0; color: var(--fg-2); }
+.undo-redo { display: inline-flex; gap: 2px; }
+.style-save input { font-family: var(--f-mono); font-size: 13px; }
+/* how long each word is said (View menu): a bar under the word, ochre when drawn-out */
+.transcript.show-len span[data-i] { position: relative; }
+.transcript.show-len span[data-i]::after { content: ""; position: absolute; inset-inline-start: 0; bottom: 1px; height: 2px;
+  width: var(--len, 0); background: var(--muted); opacity: 0.55; border-radius: 1px; pointer-events: none; }
+.transcript.show-len span[data-i].long::after { background: var(--ochre); opacity: 1; height: 3px; }
 .tr-info { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .tr-translate { display: flex; gap: 10px; align-items: center; margin-inline-start: auto; }
 .tr-translate label { display: flex; gap: 4px; align-items: center; }
