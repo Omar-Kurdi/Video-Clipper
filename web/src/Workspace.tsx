@@ -674,7 +674,9 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play, folded,
             {ed.transcribeError && <p className="small err-text" role="alert">Transcription stopped. {ed.transcribeError}</p>}
             <button type="button" className="btn primary" onClick={() => ed.transcribe()}>{ed.transcribeError ? "Try again" : "Transcribe video"}</button>
           </>)}
-          <p className="muted small">You can already pick moments on the timeline; captions for your clips are transcribed when you render.</p>
+          <p className="muted small">You can already pick moments on the timeline. {ed.short?.captions !== false
+            ? <>Captions for your clips are transcribed when you render, or <button type="button" className="link" onClick={() => ed.update({ captions: false })}>render without captions</button> and no transcript is needed.</>
+            : <>This short has no captions, so it renders without a transcript.</>}</p>
         </div>
       ) : (
         <>

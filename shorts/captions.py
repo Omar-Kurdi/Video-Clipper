@@ -51,21 +51,23 @@ class Style:
     title: TextStyle
 
 
+CAPTION_Y = 0.83  # captions sit a third of the way below the centre (-33 on the height slider)
+
 PRESETS: dict[str, Style] = {
     # dark translucent box, like the reference short
-    "box": Style(TextStyle(),
+    "box": Style(TextStyle(y=CAPTION_Y),
                  TextStyle(size=44, color="#FFD54A", box_opacity=0.55, radius=10,
                            pad_x=22, pad_y=10, y=0.60)),
     # rounded pill, spoken word highlighted
-    "pill": Style(TextStyle(radius=40, box_opacity=0.72, pad_x=40, pad_y=18, highlight="#FFD54A"),
+    "pill": Style(TextStyle(radius=40, box_opacity=0.72, pad_x=40, pad_y=18, highlight="#FFD54A", y=CAPTION_Y),
                   TextStyle(size=42, color="#111111", box_color="#FFD54A", box_opacity=1.0,
                             radius=30, pad_x=28, pad_y=10, y=0.60)),
     # no box, thick outline (classic shorts look)
     "outline": Style(TextStyle(size=76, box=False, outline=7, shadow=6, highlight="#FFD54A",
-                               max_words=2, max_chars=16),
+                               max_words=2, max_chars=16, y=CAPTION_Y),
                      TextStyle(size=44, color="#FFD54A", box=False, outline=5, y=0.60)),
     # quiet: soft shadow only
-    "minimal": Style(TextStyle(size=60, box=False, shadow=10),
+    "minimal": Style(TextStyle(size=60, box=False, shadow=10, y=CAPTION_Y),
                      TextStyle(size=40, color="#E8E8E8", box=False, shadow=8, y=0.60)),
 }
 

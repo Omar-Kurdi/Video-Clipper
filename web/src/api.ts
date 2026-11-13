@@ -184,8 +184,8 @@ const json = (body: unknown, method = "POST"): RequestInit => ({
   method, headers: { "content-type": "application/json" }, body: JSON.stringify(body),
 });
 
-export const defaultSettings = (name = "Short 1"): ShortSettings => ({
-  name, ranges: [], title: null, style: "pill", style_data: null, min_gap: 0.4,
+export const defaultSettings = (name = "Short 1", style = "pill"): ShortSettings => ({
+  name, ranges: [], title: null, style, style_data: null, min_gap: 0.4,
   transition: "morph", transition_frames: 4, zoom: 1, grade: false, captions: true, speed: 1, harakat: "all", quran_tag: true,
   even_volume: true,
 });

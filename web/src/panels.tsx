@@ -560,7 +560,21 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
 
   return (
     <div className="panel">
-      <label className="check"><input type="checkbox" checked={s.captions} onChange={(e) => ed.update({ captions: e.target.checked })} />Burn in captions</label>
+      <label className="field">Captions
+        <select value={!s.captions ? "none" : s.caption_lang2 ? "both" : s.caption_lang ?? "original"}
+          onChange={(e) => ed.update(e.target.value === "none" ? { captions: false }
+            : e.target.value === "both" ? { captions: true, caption_lang: "original", caption_lang2: ed.translationLang }
+            : { captions: true, caption_lang: e.target.value, caption_lang2: null })}>
+          <option value="none">None: just the clip, no transcript needed</option>
+          <option value="original">As spoken ({ed.translationLang === "en" ? "Arabic" : "English"})</option>
+          <option value={ed.translationLang} disabled={!ed.translation}>
+            {ed.translationLang === "en" ? "English" : "Arabic"} translation{ed.translation ? "" : " (translate the transcript first)"}
+          </option>
+          <option value="both" disabled={!ed.translation}>
+            Both: {ed.translationLang === "en" ? "Arabic, English under it" : "English, Arabic under it"}{ed.translation ? "" : " (translate first)"}
+          </option>
+        </select>
+      </label>
       {!compact && <h4 className="group-head first">Style</h4>}
       <div className="presets" role="radiogroup" aria-label="Caption style">
         {names.map((n) => (
@@ -578,27 +592,13 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
         <HeightSlider label="Name plate height" y={plate.y} onChange={(y) => patchTitle({ y })} />
         <label className="field">Name plate size {plate.size}<input type="range" min={24} max={80} step={2} value={plate.size} onChange={(e) => patchTitle({ size: +e.target.value })} /></label>
       </>}
-      <HeightSlider label="Caption height" y={cap.y} onChange={(y) => patch({ y })} />
-      {!compact && <h4 className="group-head">Text</h4>}
-      <label className="field">Caption language
-        <select value={s.caption_lang2 ? "both" : s.caption_lang ?? "original"}
-          onChange={(e) => ed.update(e.target.value === "both"
-            ? { caption_lang: "original", caption_lang2: ed.translationLang }
-            : { caption_lang: e.target.value, caption_lang2: null })}>
-          <option value="original">As spoken ({ed.translationLang === "en" ? "Arabic" : "English"})</option>
-          <option value={ed.translationLang} disabled={!ed.translation}>
-            {ed.translationLang === "en" ? "English" : "Arabic"} translation{ed.translation ? "" : " (translate the transcript first)"}
-          </option>
-          <option value="both" disabled={!ed.translation}>
-            Both: {ed.translationLang === "en" ? "Arabic, English under it" : "English, Arabic under it"}{ed.translation ? "" : " (translate first)"}
-          </option>
-        </select>
-      </label>
-      <label className="check" title={s.captions ? "While a recognised Quran verse is quoted, a small line above the captions names the surah and the ayah being recited" : "Shown above the captions, so it needs Burn in captions"}>
-        <input type="checkbox" disabled={!s.captions} checked={s.captions && (s.quran_tag ?? true)} onChange={(e) => ed.update({ quran_tag: e.target.checked })} />
+      {s.captions && <HeightSlider label="Caption height" y={cap.y} onChange={(y) => patch({ y })} />}
+      {!compact && s.captions && <h4 className="group-head">Text</h4>}
+      {s.captions && <label className="check" title="While a recognised Quran verse is quoted, a small line above the captions names the surah and the ayah being recited">
+        <input type="checkbox" checked={s.quran_tag ?? true} onChange={(e) => ed.update({ quran_tag: e.target.checked })} />
         Show surah and ayah when a verse is quoted
-      </label>
-      {(s.caption_lang ?? "original") === "original" && <label className="field">Harakat (tashkeel) in captions
+      </label>}
+      {s.captions && (s.caption_lang ?? "original") === "original" && <label className="field">Harakat (tashkeel) in captions
         <select value={s.harakat ?? "all"} onChange={(e) => ed.update({ harakat: e.target.value as "all" | "quran" | "none" })}>
           <option value="all">Show everywhere</option>
           <option value="quran">Only in Quran quotations</option>

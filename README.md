@@ -13,7 +13,7 @@ also get Quran and hadith quotations recognised and corrected.
 
 ![The editor in use: the cut played in the preview, the transcript and the settings folded away and brought back, a caption opened](docs/screenshots/editor.gif)
 
-![The editor on another lecture, with the caption look settings and the TikTok safe area shown on the preview](docs/screenshots/editor-ar.png)
+![The editor on an English talk by another speaker, with the caption look settings (captions as spoken, your own style picked) and the TikTok safe area shown on the preview](docs/screenshots/editor-ar.png)
 
 Needs `ffmpeg` (NVENC is used when available), Pillow built with raqm and
 Node 18+ for the web app. `./install.sh` installs the Python packages: with
@@ -97,6 +97,11 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   cuts, caption style, name plate and caption height, zoom in or out, grade,
   export speed) update a live 9:16 preview;
   **Render** runs in the background and the result plays and downloads in place.
+- **Captions** (under Look): as spoken, the translation, both, or **None**,
+  which renders just the clip and needs no transcript at all. They sit at
+  −33 on the height slider (a third of the way below the centre) unless your
+  style says otherwise, and a new short starts with your own saved style when
+  you have one.
 - **Accurate Arabic**: Arabic lectures are transcribed with Whisper for the
   word timings, then the audio is re-read by
   [Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026)

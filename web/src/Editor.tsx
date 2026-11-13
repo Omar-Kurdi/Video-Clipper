@@ -166,7 +166,8 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       let pick = byId(initialShort.current) ?? byId(lastShort(lectureId))
         ?? [...list].filter((s) => !isEmpty(s)).sort((a, b) => b.created - a.created)[0] ?? list.find(isEmpty);
       if (!pick) {
-        pick = await api.createShort(lectureId, defaultSettings("Short 1"));
+        const own = Object.keys((await api.styles().catch(() => null))?.custom ?? {})[0];
+        pick = await api.createShort(lectureId, defaultSettings("Short 1", own));
         list = [...list, pick];
       }
       setShorts(list);
@@ -307,7 +308,8 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       },
       selectShort: (id) => go({ page: "editor", lecture: lectureId, mode, short: id }),
       newShort: async (ranges = []) => {
-        const settings = { ...defaultSettings(`Short ${visible.filter((s) => !isEmpty(s)).length + 1}`), ranges,
+        const own = Object.keys(styles?.custom ?? {})[0];
+        const settings = { ...defaultSettings(`Short ${visible.filter((s) => !isEmpty(s)).length + 1}`, own), ranges,
           ...(current ? { style: current.style, style_data: current.style_data, title: current.title } : {}) };
         // reuse an empty draft instead of piling up new ones
         const draft = shorts.find((s) => isEmpty(s) && s.id !== current?.id);
