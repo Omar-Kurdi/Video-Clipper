@@ -6,7 +6,7 @@ Pillow>=10
 fastapi>=0.110
 uvicorn>=0.29
 python-multipart>=0.0.9
-yt-dlp
+yt-dlp[default]  # with yt-dlp-ejs, which solves YouTube's JS challenge (needs deno); without it downloads can be throttled to a crawl
 # accurate Arabic (Cohere-Speech-Tashkeel), translation (Qwen3), Quran/hadith texts
 torch>=2.4
 transformers==5.8.1

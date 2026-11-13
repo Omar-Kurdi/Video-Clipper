@@ -55,18 +55,29 @@ def download(url: str, lid: str, report) -> dict:
         raise RuntimeError(f"yt-dlp: {why[-1] if why else 'failed'}")
     title = r.stdout.strip().splitlines()[-1]
     store.update_lecture(lid, title=title)
+    # -N: fragmented formats (HLS/DASH) come down over several connections at once
     proc = subprocess.Popen(
-        [*YT_DLP, "--no-playlist", "--newline", "-f",
+        [*YT_DLP, "--no-playlist", "--newline", "-N", "4", "-f",
          "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*[height<=1080]+ba/b",
          "--merge-output-format", "mp4", "-o", str(d / "source.%(ext)s"), url],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     pct = re.compile(r"\[download\]\s+([\d.]+)%")
+    rate = re.compile(r" at\s+~?\s*([\d.]+\s*[KMG]iB/s)(?:\s+ETA\s+([\d:]+))?")
+    part, tail = "video", []
     for line in proc.stdout:
+        tail = (tail + [line.strip()])[-20:]
+        if "Destination:" in line:  # the video comes first, then the audio, each from 0%
+            part = "audio" if line.rstrip().endswith((".m4a", ".opus", ".mp3")) else "video"
         m = pct.search(line)
         if m:
-            report(progress=float(m.group(1)) / 100, stage="downloading")
+            r = rate.search(line)
+            speed = r.group(1).replace("iB", "B").replace(" ", "") if r else ""
+            eta = f", {r.group(2)} left" if r and r.group(2) else ""
+            report(progress=float(m.group(1)) / 100, stage=f"downloading {part}",
+                   message=f"{speed}{eta}" if speed else "")
     if proc.wait() != 0:
-        raise RuntimeError("yt-dlp failed")
+        why = [l for l in tail if l.startswith("ERROR")]
+        raise RuntimeError(f"yt-dlp: {why[-1]}" if why else "yt-dlp failed")
     src = next(p for p in d.glob("source.*") if p.suffix not in (".part", ".ytdl", ".json"))
     store.update_lecture(lid, source=src.name)
     return {"title": title}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type TextStyle, type Word } from "./api";
+import { api, type Range, type TextStyle, type Word } from "./api";
 import { exportSpeed, type Ed } from "./Editor";
 import { effectiveCaption } from "./panels";
 import { rememberVolume, VolumeControl } from "./Volume";
@@ -91,6 +91,32 @@ function textCss(ts: TextStyle, k: number): React.CSSProperties {
   };
 }
 
+/**
+ * Commands for the preview's player from elsewhere in the editor: play a part
+ * of the short (given in lecture time, as captions are), play or pause, step.
+ * With no player open, the command waits and the preview switches to "Play
+ * cut" to take it.
+ */
+export type PreviewCmd = { kind: "play"; src: Range } | { kind: "toggle" } | { kind: "seek"; by: number };
+const previewBus = new EventTarget();
+let previewPending: PreviewCmd | null = null;
+let previewListening = false;
+export function previewCommand(c: PreviewCmd) {
+  if (previewListening) previewBus.dispatchEvent(new CustomEvent<PreviewCmd>("cmd", { detail: c }));
+  else { previewPending = c; previewBus.dispatchEvent(new Event("wake")); }
+}
+/** Call `open` when a command is waiting for the player (now or later). */
+export function usePreviewWake(open: () => void) {
+  const fn = useRef(open);
+  fn.current = open;
+  useEffect(() => {
+    if (previewPending) fn.current();
+    const on = () => fn.current();
+    previewBus.addEventListener("wake", on);
+    return () => previewBus.removeEventListener("wake", on);
+  }, []);
+}
+
 export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; overlay?: React.ReactNode }) {
   const s = ed.short!;
   const height = Math.round((width * 16) / 9);
@@ -111,6 +137,7 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
   const [cut, setCut] = useState(0);
   const [exact, setExact] = useState<string | null>(null);
   const [exactBusy, setExactBusy] = useState(false);
+  const stopOut = useRef<number | null>(null);  // pause here (output time): the end of a caption played on its own
 
   useEffect(() => { trackFor(ed.lecture.id, ed.framingVersion > 0).then(setTrack); }, [ed.lecture.id, ed.framingVersion]);
 
@@ -200,8 +227,15 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
         const cur = (r.active === 0 ? v0 : v1).current!;
         let o = 0;
         for (let j = 0; j < r.k; j++) o += segs[j][1] - segs[j][0] - fade;
-        setOutT(o + (cur.currentTime - segs[r.k][0]));
+        const ot = o + (cur.currentTime - segs[r.k][0]);
+        setOutT(ot);
         setSrcT(cur.currentTime);
+        if (stopOut.current != null && ot >= stopOut.current) {
+          stopOut.current = null;
+          vids().forEach((v) => v.pause());
+          setPlaying(false);
+          return;
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -213,6 +247,7 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
   const seekOut = (target: number) => {
     const [a, b] = vids();
     if (!a || !b || !segs.length) return;
+    stopOut.current = null;
     target = clamp(target, 0, Math.max(0, total - 0.05));
     let k = 0, o = 0;
     while (k < segs.length - 1 && target >= o + (segs[k][1] - segs[k][0] - fade)) {
@@ -232,7 +267,43 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
     if (wasPlaying) a.play().catch(() => {});
   };
 
+  /** Where a lecture time lands in the short (output time); in a removed pause, the next kept moment. */
+  const outOf = (t: number) => {
+    let o = 0;
+    for (const [a, b] of segs) {
+      if (t < a) return o;
+      if (t <= b) return o + (t - a);
+      o += b - a - fade;
+    }
+    return total;
+  };
+  const playOut = (from: number, to: number | null) => {
+    seekOut(from);
+    stopOut.current = to;
+    const v = (run.current.active === 0 ? v0 : v1).current;
+    if (!v) return;
+    const go = () => v.play().then(() => setPlaying(true)).catch(() => {});
+    // a player that has only just opened: start once its video can play
+    if (v.readyState >= 2) go(); else v.addEventListener("canplay", () => { seekOut(from); stopOut.current = to; go(); }, { once: true });
+  };
+  const command = useRef<(c: PreviewCmd) => void>(() => {});
+  command.current = (c) => {
+    if (c.kind === "play") playOut(outOf(c.src[0]), outOf(c.src[1]));
+    else if (c.kind === "toggle") toggle();
+    else seekOut(outT + c.by);
+  };
+  useEffect(() => {
+    const on = (e: Event) => command.current((e as CustomEvent<PreviewCmd>).detail);
+    previewBus.addEventListener("cmd", on);
+    previewListening = true;
+    const waiting = previewPending;
+    previewPending = null;
+    if (waiting) setTimeout(() => command.current(waiting), 0);  // after the first reset of the player
+    return () => { previewBus.removeEventListener("cmd", on); previewListening = false; };
+  }, []);
+
   const toggle = () => {
+    stopOut.current = null;
     if (playing) { vids().forEach((v) => v.pause()); setPlaying(false); return; }
     if (!run.current.started) { reset(); run.current.started = true; }
     (run.current.active === 0 ? v0 : v1).current!.play().then(() => setPlaying(true)).catch(() => {});

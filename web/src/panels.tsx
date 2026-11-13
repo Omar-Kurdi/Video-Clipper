@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Camera, type Caption, type CaptionEdits, type Post, type Range, type StyleData, type TextStyle } from "./api";
 import { exportSpeed, finalLength, type Ed } from "./Editor";
-import { QuickPlayer } from "./Quick";
+import { QuickPlayer, usePreviewWake } from "./Quick";
 import { rememberVolume } from "./Volume";
 import { fmt, parseTime, useDebounced } from "./util";
 
@@ -72,6 +72,8 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
 
   const sid = s?.id;
   useEffect(() => { setTab(pick()); }, [sid, ed.renderedVersion, s?.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
+  // a caption or a key sent to the preview: show the player that takes it
+  usePreviewWake(() => { if (s?.ranges.length) setTab("play"); });
   useEffect(() => {
     if (tab !== "look" || !sid) return;
     let live = true;
@@ -359,10 +361,18 @@ function PostText({ ed }: { ed: Ed }) {
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const set = (p: Partial<Post>) => ed.update({ post: { ...post, ...p } });
+  const [waited, setWaited] = useState(0);  // seconds Gemini has been writing
+  useEffect(() => {
+    if (!busy) return;
+    setWaited(0);
+    const t0 = Date.now();
+    const id = setInterval(() => setWaited(Math.round((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
   const write = async () => {
     setBusy(true); setErr(null);
     try { ed.update({ post: (await api.describeShort(ed.lecture.id, s.id)).post ?? null }); }
-    catch (e) { setErr((e as Error).message); }
+    catch (e) { setErr(`Couldn't write it: ${(e as Error).message}`); }
     finally { setBusy(false); }
   };
   const text = [post.title, post.description, post.hashtags.map((h) => `#${h}`).join(" ")].filter(Boolean).join("\n\n");
@@ -372,10 +382,12 @@ function PostText({ ed }: { ed: Ed }) {
     <div className="post-text">
       <div className="row"><b>Post text</b>
         <button type="button" className="btn small" disabled={busy || !!why} title={why} onClick={write}>
-          {busy ? "Writing…" : post.title ? "Write again with Gemini" : "Write with Gemini"}
+          {busy ? `Writing… ${waited} s` : post.title ? "Write again with Gemini" : "Write with Gemini"}
         </button>
       </div>
-      {err && <p className="small err-text">{err}</p>}
+      {why && <p className="small muted">{why}.</p>}
+      {busy && waited >= 15 && <p className="small muted" role="status">Gemini is slow right now; it gives up within about a minute and a half and says so here.</p>}
+      {err && <p className="small err-text" role="alert">{err}</p>}
       <label className="field"><span className="small muted">Title</span>
         <input type="text" dir="auto" value={post.title} maxLength={100} placeholder="Shown above the video"
           onChange={(e) => set({ title: e.target.value })} /></label>

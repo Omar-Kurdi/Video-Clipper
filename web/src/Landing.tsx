@@ -13,7 +13,8 @@ const isLink = (v: string) => /^https?:\/\//i.test(v) || /(^|\.)(youtube\.com|yo
 function statusText(l: Lecture): string {
   if (l.job) {
     const pct = l.job.progress ? ` ${Math.round(l.job.progress * 100)}%` : "";
-    return `${l.job.stage || l.job.kind}${pct}`;
+    const speed = l.job.stage?.startsWith("downloading") && l.job.message ? ` · ${l.job.message}` : "";
+    return `${l.job.stage || l.job.kind}${pct}${speed}`;
   }
   if (l.status === "error") return "Import failed";
   if (l.status !== "ready") return l.status;

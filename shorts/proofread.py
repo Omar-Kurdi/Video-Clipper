@@ -76,11 +76,12 @@ def api_key() -> str | None:
 RETRY_WAITS = (5, 15, 30)  # seconds between attempts when the model is busy
 
 
-def _call(path: str, key: str, body: dict | None = None, timeout: float = 600) -> dict:
-    """One API call; a busy model (500/503) is tried again a few times."""
+def _call(path: str, key: str, body: dict | None = None, timeout: float = 600,
+          waits: tuple[int, ...] = RETRY_WAITS) -> dict:
+    """One API call; a busy model (500/503) is tried again after each of `waits`."""
     import time
 
-    for wait in RETRY_WAITS + (None,):
+    for wait in waits + (None,):
         try:
             return _call_once(path, key, body, timeout)
         except Busy:
@@ -110,6 +111,8 @@ def _call_once(path: str, key: str, body: dict | None, timeout: float) -> dict:
         raise ProofreadError(f"Gemini error {e.code}: {detail}") from e
     except urllib.error.URLError as e:
         raise ProofreadError(f"can't reach Gemini: {e.reason}") from e
+    except TimeoutError as e:
+        raise ProofreadError(f"Gemini timed out after {timeout:.0f} s; try again in a while") from e
 
 
 def choose_models(key: str) -> list[str]:
@@ -265,9 +268,16 @@ def apply(data: dict, suggestions: list[dict]) -> int:
     return changed
 
 
+QUICK_TIMEOUT = 45   # seconds: a question asked while someone waits at a button
+QUICK_WAITS = (3,)   # tried once more if busy, then the next model
+
+
 def ask_json(prompt: str, schema: dict, temperature: float = 0.4) -> tuple[object, str]:
     """A text-only question with a JSON answer (`schema` in Gemini's format).
-    Returns (answer, model). Busy or exhausted models hand over to the next."""
+    Returns (answer, model). Busy or exhausted models hand over to the next.
+    Asked while someone waits, so it gives up within a minute or two instead
+    of retrying for long (the proofreading job is the patient one)."""
+    import time
     key = api_key()
     if not key:
         raise ProofreadError("set GEMINI_API_KEY in .env to use Gemini")
@@ -275,12 +285,16 @@ def ask_json(prompt: str, schema: dict, temperature: float = 0.4) -> tuple[objec
             "generationConfig": {"temperature": temperature, "responseMimeType": "application/json",
                                  "responseSchema": schema}}
     models = choose_models(key)
+    start = time.monotonic()
     for model in models:
         try:
-            res = _call(f"models/{model}:generateContent", key, body)
+            res = _call(f"models/{model}:generateContent", key, body, timeout=QUICK_TIMEOUT, waits=QUICK_WAITS)
             break
         except (Busy, OutOfQuota):
-            if model == models[-1]:
+            if model == models[-1] or time.monotonic() - start > 90:
+                raise
+        except ProofreadError as e:
+            if "timed out" not in str(e) or model == models[-1] or time.monotonic() - start > 90:
                 raise
     try:
         return json.loads(res["candidates"][0]["content"]["parts"][0]["text"]), model

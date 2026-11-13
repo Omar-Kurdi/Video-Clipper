@@ -4,7 +4,7 @@ import { Confirm } from "./Confirm";
 import { TopBar, type Ed } from "./Editor";
 import { CaptionTextPanel, CaptionsPanel, ClipStrip, captionEdit, ExportPanel, FramingPanel, PausesPanel, PostPanel, Preview, Stats, cropWidth, sortedCameras, summary, type Section } from "./panels";
 import { VolumeControl } from "./Volume";
-import { SpeedPicker, at, trackFor, type Track } from "./Quick";
+import { SpeedPicker, at, previewCommand, trackFor, type Track } from "./Quick";
 import { Timeline } from "./Timeline";
 import { clamp, fmt, normalize, storage, store } from "./util";
 
@@ -37,19 +37,70 @@ type Part = "transcript" | "source" | "timeline" | "preview" | "side";
 const PART_NAME: Record<Part, string> = { transcript: "Transcript", source: "Video", timeline: "Timeline", preview: "Preview", side: "Settings" };
 const NONE_FOLDED: Record<Part, boolean> = { transcript: false, source: false, timeline: false, preview: false, side: false };
 
-/** The preview's picture: as tall as the editor allows beside its controls, up to 400 wide. */
-function usePreviewWidth(ref: React.RefObject<HTMLElement>) {
-  const [w, setW] = useState(240);
+/** The editor's height, for the preview's picture: as tall as it allows beside its controls. */
+function useHeight(ref: React.RefObject<HTMLElement>) {
+  const [h, setH] = useState(800);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const fit = (h: number) => setW(Math.round(clamp(((h - 262) * 9) / 16, 150, Math.min(400, window.innerWidth * 0.22))));
-    fit(el.clientHeight);
-    const ro = new ResizeObserver(([e]) => fit(e.contentRect.height));
+    setH(el.clientHeight);
+    const ro = new ResizeObserver(([e]) => setH(e.contentRect.height));
     ro.observe(el);
     return () => ro.disconnect();
   }, [ref]);
-  return w;
+  return h;
+}
+
+/** Columns you can drag wider or narrower: their widths in pixels, kept between visits. */
+type Sized = "transcript" | "preview" | "side";
+const SIZE_KEY = "column-widths";
+const SIZE_LIMIT: Record<Sized, [number, number]> = { transcript: [200, 900], preview: [220, 900], side: [300, 760] };
+const SOURCE_MIN = 260;  // the video keeps at least this much
+
+/** The handle on a column's edge: drag it, use the arrow keys, or double-click it to go back to the default width. */
+function ColumnHandle({ part, edge, col, rows, grid, sizes, onSize }: {
+  part: Sized; edge: "start" | "end"; col: number; rows: string; grid: React.RefObject<HTMLDivElement>;
+  sizes: Partial<Record<Sized, number>>; onSize: (part: Sized, w: number | null) => void;
+}) {
+  const sel = { transcript: ".transcript-panel", preview: ".preview-col", side: ".side" }[part];
+  const width = () => grid.current?.querySelector<HTMLElement>(sel)?.getBoundingClientRect().width ?? 0;
+  // how wide it may get: its limit, and never squeezing the video below its minimum
+  const max = () => {
+    const room = (grid.current?.querySelector<HTMLElement>(".source")?.getBoundingClientRect().width ?? 0) - SOURCE_MIN;
+    return Math.min(SIZE_LIMIT[part][1], width() + Math.max(0, room));
+  };
+  const set = (w: number) => onSize(part, Math.round(clamp(w, SIZE_LIMIT[part][0], Math.max(SIZE_LIMIT[part][0], max()))));
+  const sign = edge === "end" ? 1 : -1;  // dragging away from the column widens it
+  const down = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = width(), top = max();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    el.classList.add("active");
+    document.body.classList.add("col-resizing");
+    const move = (ev: PointerEvent) => onSize(part, Math.round(clamp(w0 + sign * (ev.clientX - x0), SIZE_LIMIT[part][0], Math.max(SIZE_LIMIT[part][0], top))));
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      el.classList.remove("active");
+      document.body.classList.remove("col-resizing");
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  };
+  return (
+    <div className={`col-resize ${edge}`} style={{ gridColumn: col, gridRow: rows }} role="separator" aria-orientation="vertical"
+      aria-label={`Resize ${PART_NAME[part].toLowerCase()}`} aria-valuenow={Math.round(sizes[part] ?? width())} tabIndex={0}
+      title="Drag to resize · double-click for the default width"
+      onPointerDown={down} onDoubleClick={() => onSize(part, null)}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        set(width() + sign * (e.key === "ArrowRight" ? 1 : -1) * (e.shiftKey ? 80 : 20));
+      }} />
+  );
 }
 
 /** The arrow that folds a section away. `to`: the side it folds towards. */
@@ -107,15 +158,33 @@ export function Workspace({ ed }: { ed: Ed }) {
   foldedRef.current = folded;
   foldRef.current = fold;
   const gridRef = useRef<HTMLDivElement>(null);
-  const previewWidth = usePreviewWidth(gridRef);
+  const [sizes, setSizes] = useState<Partial<Record<Sized, number>>>(() => storage(SIZE_KEY, {}));
+  const setSize = (part: Sized, w: number | null) => setSizes((now) => {
+    const next = { ...now };
+    if (w == null) delete next[part]; else next[part] = w;
+    store(SIZE_KEY, next);
+    return next;
+  });
+  // the preview's picture: as tall as the editor allows, and no wider than its column when you've sized it
+  const fitWidth = ((useHeight(gridRef) - 262) * 9) / 16;
+  const previewWidth = Math.round(sizes.preview
+    ? clamp(Math.min(fitWidth, sizes.preview - 32), 150, 900)
+    : clamp(fitWidth, 150, Math.min(400, window.innerWidth * 0.22)));
   // the columns: a folded one is a strip; the room it leaves goes to the video, else the transcript, else the preview
   const strip = "30px";
   const cols = [
-    folded.transcript ? strip : folded.source ? "minmax(0, 1fr)" : "minmax(260px, 22%)",
+    folded.transcript ? strip : folded.source ? "minmax(0, 1fr)" : sizes.transcript ? `${sizes.transcript}px` : "minmax(260px, 22%)",
     folded.source ? strip : "minmax(0, 1fr)",
-    folded.preview ? strip : folded.transcript && folded.source ? "minmax(0, 1fr)" : `${Math.max(previewWidth + 32, 302)}px`,
-    folded.side ? "62px" : folded.transcript && folded.source && folded.preview ? "minmax(384px, 1fr)" : "384px",
+    folded.preview ? strip : folded.transcript && folded.source ? "minmax(0, 1fr)" : `${sizes.preview ?? Math.max(previewWidth + 32, 302)}px`,
+    folded.side ? "62px" : folded.transcript && folded.source && folded.preview ? "minmax(384px, 1fr)" : `${sizes.side ?? 384}px`,
   ].join(" ");
+  // a column has a handle while it is open and has a width of its own (not taking up the room left over)
+  const sizable = {
+    transcript: !folded.transcript && !folded.source,
+    preview: !folded.preview && !(folded.transcript && folded.source),
+    side: !folded.side && !(folded.transcript && folded.source && folded.preview),
+  };
+  const handle = { grid: gridRef, sizes, onSize: setSize };
   const ce = ed.short?.caption_edits;
   const captionsEdited = !!ce && (ce.starts.length > 0 || ce.joins.length > 0 || Object.keys(ce.times).length > 0);
   // a render just finished: show what to post it with
@@ -130,6 +199,13 @@ export function Workspace({ ed }: { ed: Ed }) {
   useEffect(() => { if (video.current) { video.current.playbackRate = rate; video.current.preservesPitch = true; } }, [rate]);
   const stopAt = useRef<number | null>(null);
   const [keysOpen, setKeysOpen] = useState(false);
+  // where Space and the arrows go: the video, or the preview's player once you click in it or play a caption there
+  const [keysTo, setKeysTo] = useState<"source" | "preview">("source");
+  const playInPreview = (r: Range) => {
+    setKeysTo("preview");
+    if (folded.preview) fold("preview", false);
+    previewCommand({ kind: "play", src: r });
+  };
 
   // ----- playback -----
   useEffect(() => {
@@ -215,8 +291,15 @@ export function Workspace({ ed }: { ed: Ed }) {
         if (k === "y" || e.shiftKey) ed.redo(); else ed.undo();
         return;
       }
-      if (e.key === "?") { e.preventDefault(); setKeysOpen((v) => !v); }
-      else if (e.key === " ") { e.preventDefault(); toggle(); }
+      if (e.key === "?") { e.preventDefault(); setKeysOpen((v) => !v); return; }
+      if (keysTo === "preview" && (e.key === " " || e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        if (el.closest("video[controls]")) return;  // the rendered video's own controls
+        e.preventDefault();
+        if (e.key === " ") previewCommand({ kind: "toggle" });
+        else previewCommand({ kind: "seek", by: (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 5 : 1) });
+        return;
+      }
+      if (e.key === " ") { e.preventDefault(); toggle(); }
       else if (e.key === "i" || e.key === "I") markIn();
       else if (e.key === "o" || e.key === "O") markOut();
       else if (e.key === "Enter") add();
@@ -274,7 +357,12 @@ export function Workspace({ ed }: { ed: Ed }) {
   return (
     <div className="app ws">
       <TopBar ed={ed} />
-      <div className="ws-grid" ref={gridRef} style={{ "--cols": cols } as CSSProperties}>
+      <div className="ws-grid" ref={gridRef} style={{ "--cols": cols } as CSSProperties}
+        onPointerDownCapture={(e) => {
+          const el = e.target as HTMLElement;
+          if (el.closest(".preview-col")) setKeysTo("preview");
+          else if (el.closest(".source, .transcript-panel, .tl")) setKeysTo("source");
+        }}>
         <TranscriptPanel ed={ed} time={time} playing={playing} sel={sel} onSelect={select} seek={seek}
           play={() => video.current?.play()} folded={folded.transcript} onFold={(v) => fold("transcript", v)} />
 
@@ -355,12 +443,15 @@ export function Workspace({ ed }: { ed: Ed }) {
             onSeek={seek} onSelect={setSel}
             captions={s?.captions ? ed.captions?.captions ?? [] : []} captionKey={capKey}
             onCaption={(c) => { setCapKey(c.key); seek(c.src[0]); }}
-            onCaptionOpen={(c) => { setCapKey(c.key); setOpen("text"); playRange(c.src); }}
+            onCaptionOpen={(c) => { setCapKey(c.key); setOpen("text"); playInPreview(c.src); }}
             onCaptionTime={(c, r) => captionEdit(ed, (e) => { e.times[String(c.key)] = [Math.round(r[0] * 100) / 100, Math.round(r[1] * 100) / 100]; })} />
           <ClipStrip ed={ed} onPlay={playRange} />
         </section>
 
-        <section className={`preview-col ${folded.preview ? "folded" : ""}`} aria-label="Preview">
+        {sizable.transcript && <ColumnHandle part="transcript" edge="end" col={1} rows="1" {...handle} />}
+        {sizable.preview && <ColumnHandle part="preview" edge="start" col={3} rows="1 / 3" {...handle} />}
+        {sizable.side && <ColumnHandle part="side" edge="start" col={4} rows="1 / 3" {...handle} />}
+        <section className={`preview-col ${folded.preview ? "folded" : ""} ${keysTo === "preview" ? "keys-here" : ""}`} aria-label="Preview">
           {folded.preview && <FoldStrip part="preview" from="right" onOpen={() => fold("preview", false)} />}
           <div className="sec-head">
             <b>Preview</b><span className="muted small">the short as it will look</span>
@@ -391,7 +482,7 @@ export function Workspace({ ed }: { ed: Ed }) {
             <div className="side-body" id="settings-panel" role="region" aria-label={SECTION_NAME[section]}>
               {section === "pauses" && <PausesPanel ed={ed} />}
               {section === "look" && <CaptionsPanel ed={ed} />}
-              {section === "text" && <CaptionTextPanel ed={ed} time={time} onPlay={(r) => { show(r[0], r[1]); playRange(r); }} selKey={capKey} onSelKey={setCapKey} />}
+              {section === "text" && <CaptionTextPanel ed={ed} time={time} onPlay={(r) => { show(r[0], r[1]); playInPreview(r); }} selKey={capKey} onSelKey={setCapKey} />}
               {section === "framing" && <FramingPanel ed={ed} />}
               {section === "export" && <ExportPanel ed={ed} />}
               {section === "post" && <PostPanel ed={ed} />}
@@ -657,9 +748,45 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play, folded,
   return (
     <section className={`transcript-panel ${folded ? "folded" : ""}`} aria-label="Transcript">
       {folded && <FoldStrip part="transcript" from="left" onOpen={() => onFold(false)} />}
-      <div className="sec-head">
-        <b>Transcript</b>
-        <span className="grow" /><FoldButton part="transcript" to="left" onFold={() => onFold(true)} />
+      <div className="tr-top">
+        <div className="sec-head">
+          <b>Transcript</b>
+          <span className="grow" /><FoldButton part="transcript" to="left" onFold={() => onFold(true)} />
+        </div>
+        {tr && (
+            <div className="search-row">
+              <label className="search">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+                <span className="sr">Search the transcript</span>
+                <input type="search" dir="auto" value={query} placeholder="Search the transcript" onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") jump(hitIdx + (e.shiftKey ? -1 : 1)); }} />
+                {query && <span className="count">{hits.length ? `${hitIdx + 1} / ${hits.length}` : "no matches"}</span>}
+              </label>
+              <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx - 1)} aria-label="Previous match">↑</button>
+              <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx + 1)} aria-label="Next match">↓</button>
+              <ViewMenu>
+                {ed.translation && <label className="check"><input type="checkbox" checked={showTr} onChange={(e) => setShowTr(e.target.checked)} />Show {LANG_NAME[ed.translationLang]}</label>}
+                {tr.words.some((w) => w.flag) && (
+                  <label className="check">
+                    <input type="checkbox" checked={showDoubt} onChange={(e) => setShowDoubt(e.target.checked)} />
+                    Mark <span className="fl-doubt">doubtful</span> words
+                  </label>
+                )}
+                {tr.words.some((w) => w.flag) && (
+                  <span className="view-key small">
+                    <span className="fl-doubt">Red</span>: likely wrong · <span className="fl-voted">amber</span>: changed by majority · <span className="fl-gemini">blue</span>: changed by Gemini. Hover a word to see what else was heard. Not every mistake is caught.
+                  </span>
+                )}
+                <label className="check" title="A bar under each word shows how long it is said; drawn-out words (a second or more) stand out. Hover a word for its seconds.">
+                  <input type="checkbox" checked={showLen} onChange={(e) => setShowLen(e.target.checked)} />Show how long each word is said
+                </label>
+                <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />Follow playback</label>
+                <span className="view-key small">
+                  <b>Click</b> a sentence to select · <b>Shift+click</b> to extend · <b>Double-click</b> to fix text{ed.translation && showTr ? " or translation" : ""}
+                </span>
+              </ViewMenu>
+            </div>
+        )}
       </div>
       {!tr ? (
         <div className="no-transcript">
@@ -680,40 +807,13 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play, folded,
         </div>
       ) : (
         <>
-          <div className="search-row">
-            <label className="search">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
-              <span className="sr">Search the transcript</span>
-              <input type="search" dir="auto" value={query} placeholder="Search the transcript" onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") jump(hitIdx + (e.shiftKey ? -1 : 1)); }} />
-              {query && <span className="count">{hits.length ? `${hitIdx + 1} / ${hits.length}` : "no matches"}</span>}
-            </label>
-            <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx - 1)} aria-label="Previous match">↑</button>
-            <button type="button" className="btn small" disabled={!hits.length} onClick={() => jump(hitIdx + 1)} aria-label="Next match">↓</button>
-            <ViewMenu>
-              {ed.translation && <label className="check"><input type="checkbox" checked={showTr} onChange={(e) => setShowTr(e.target.checked)} />Show {LANG_NAME[ed.translationLang]}</label>}
-              {tr.words.some((w) => w.flag) && (
-                <label className="check">
-                  <input type="checkbox" checked={showDoubt} onChange={(e) => setShowDoubt(e.target.checked)} />
-                  Mark <span className="fl-doubt">doubtful</span> words
-                </label>
-              )}
-              {tr.words.some((w) => w.flag) && (
-                <span className="view-key small">
-                  <span className="fl-doubt">Red</span>: likely wrong · <span className="fl-voted">amber</span>: changed by majority · <span className="fl-gemini">blue</span>: changed by Gemini. Hover a word to see what else was heard. Not every mistake is caught.
-                </span>
-              )}
-              <label className="check" title="A bar under each word shows how long it is said; drawn-out words (a second or more) stand out. Hover a word for its seconds.">
-                <input type="checkbox" checked={showLen} onChange={(e) => setShowLen(e.target.checked)} />Show how long each word is said
-              </label>
-              <label className="check"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />Follow playback</label>
-              <span className="view-key small">
-                <b>Click</b> a sentence to select · <b>Shift+click</b> to extend · <b>Double-click</b> to fix text{ed.translation && showTr ? " or translation" : ""}
-              </span>
-            </ViewMenu>
-          </div>
           <TranscriptInfo ed={ed} />
-          <Moments ed={ed} onSelect={onSelect} seek={seek} />
+          <Moments ed={ed} seek={seek} onSelect={(r) => {
+            onSelect(r);
+            // bring the moment's first sentence into view (below the header that stays on top)
+            const i = r ? words.findIndex((w) => w.e > r[0]) : -1;
+            if (i >= 0) article.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+          }} />
           <article ref={article} lang={lang} dir={rtl ? "rtl" : "ltr"} className={`transcript ${rtl ? "rtl" : ""} ${showLen ? "show-len" : ""}`} onMouseUp={onMouseUp}>
             {body}
           </article>
@@ -811,8 +911,8 @@ function SourceBadge({ src }: { src: import("./api").Source }) {
 const LANG_NAME: Record<string, string> = { en: "English", ar: "Arabic" };
 
 const KEYS: [string, string][] = [
-  ["Space", "Play or pause"],
-  ["← →", "Back or forward 1 second (with Shift, 5)"],
+  ["Space", "Play or pause: the video, or the preview once you click in it or play a caption (click the video to switch back)"],
+  ["← →", "Back or forward 1 second (with Shift, 5), in whichever is playing"],
   ["I", "Start the selection at the playhead"],
   ["O", "End the selection at the playhead"],
   ["Enter", "Add the selection to the short"],
