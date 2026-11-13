@@ -5,6 +5,12 @@ cd "$(dirname "$0")"
 
 need() { command -v "$1" >/dev/null || { echo "Missing: $1 — $2" >&2; exit 1; }; }
 PY="${PYTHON:-python3}"   # e.g. PYTHON=python3.14 ./install.sh
+# an environment that already works stays on its own Python version: the
+# system's python3 may have moved to one the packages don't install on yet,
+# and rebuilding on it would throw a working environment away
+if [ -z "${PYTHON:-}" ] && HAVE=$(.venv/bin/python -c 'import sys; print("python%d.%d" % sys.version_info[:2])' 2>/dev/null) && command -v "$HAVE" >/dev/null; then
+  PY="$HAVE"
+fi
 need "$PY"   "install Python 3.10+"
 need ffmpeg  "install ffmpeg (with NVENC support for GPU encoding)"
 need node    "install Node.js 18+"
