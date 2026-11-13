@@ -7,11 +7,13 @@ optical-flow "morph" cuts, a crop that holds the main speaker on every camera
 captions (right-to-left for Arabic) and an optional name plate. Arabic talks
 also get Quran and hadith quotations recognised and corrected.
 
-![The library on a first visit](docs/screenshots/landing.png)
+![The whole first-visit page: the welcome and the field for a video, the empty library, what sets the shorts apart, the four steps, and the editor's four parts](docs/screenshots/landing.png)
 
-![The editor on an English interview: suggested moments, the transcript, the video with its 9:16 frame, the preview and the timeline](docs/screenshots/editor.png)
+![The editor on an Arabic lecture: the transcript, the video with its 9:16 frame, the preview of the short with its Arabic caption and the English under it, and the caption text beside it, over the timeline](docs/screenshots/editor.png)
 
-![The editor on an Arabic lecture, with the TikTok safe area shown on the preview](docs/screenshots/editor-ar.png)
+![The editor in use: the cut played in the preview, the transcript and the settings folded away and brought back, a caption opened](docs/screenshots/editor.gif)
+
+![The editor on another lecture, with the caption look settings and the TikTok safe area shown on the preview](docs/screenshots/editor-ar.png)
 
 Needs `ffmpeg` (NVENC is used when available), Pillow built with raqm and
 Node 18+ for the web app. `./install.sh` installs the Python packages: with
@@ -53,11 +55,17 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   video lists its shorts; click one to open it.
 
   ![Your shorts and the library](docs/screenshots/library.png)
-- **Editor** – one screen, left to right: the transcript (search; click a
-  sentence to select it, shift+click to extend, double-click to correct the
-  text, and corrections are used in the captions), the video, then the preview
-  and settings (clips, cuts, captions, framing). The waveform timeline runs
-  under the transcript and video (`I` / `O` to mark, `Enter` to add, drag to
+- **Editor** – one screen, four columns side by side: the transcript (search;
+  click a sentence to select it, shift+click to extend, double-click to correct
+  the text, and corrections are used in the captions), the video, the preview
+  of the short at full height, then the settings (clips, cuts, captions,
+  framing). Every one of them, and the timeline, folds away with the arrow in
+  its corner (`«` `»`) when another needs the room, and stays folded until you
+  bring it back:
+
+  ![The editor with the transcript and the settings folded away: the video and the preview take the room](docs/screenshots/editor-folded.png)
+
+  The waveform timeline runs under the transcript and video (`I` / `O` to mark, `Enter` to add, drag to
   select, drag along the time ruler to scrub, scroll to move, `Ctrl`+scroll
   to zoom). Shorts are tabs in the top
   bar, next to the Render button. Selecting in either place selects in both.
@@ -152,7 +160,15 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   It applies to the render; the quick preview keeps following the main speaker.
 
   <img src="docs/screenshots/follow.png" alt="Framing: who to frame, the main speaker or whoever is talking" width="300">
-- **Safe area**: under the preview, show where TikTok, Reels or Shorts put
+- **Preview**: its own column, as tall as the window allows. *Play cut* plays
+  the cut as it is now; *Still* is one frame exactly as the render draws it,
+  with the caption (and the second line) the short has at that moment;
+  *Rendered* is the finished video.
+- **Caption text** (in the settings): every caption word for word, with the
+  translation line under it when the short shows both languages. Open a
+  caption to split it (click the `⁞` where the new one should start), join it
+  with the next, edit its text, or edit the translation of its sentence.
+- **Safe area**: above the preview, show where TikTok, Reels or Shorts put
   their buttons and text, so faces and captions stay clear of them (approximate).
 - **Post text**: under Export, a title, description and hashtags for the short
   (yours, or **Write with Gemini** from what the short says, in its language),

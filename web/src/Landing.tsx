@@ -346,9 +346,23 @@ function HowItWorks() {
       <ol className="steps">
         <li><span className="tc">01</span><b>Add</b><span>A YouTube link or a file on this computer.</span></li>
         <li><span className="tc">02</span><b>Mark</b><span>Select sentences in the transcript, or take a suggested moment.</span></li>
-        <li><span className="tc">03</span><b>Tune</b><span>Captions, framing per camera, pause length, safe area.</span></li>
+        <li><span className="tc">03</span><b>Tune</b><span>Captions, a translation under them, framing per camera, pause length, with the short previewed beside you.</span></li>
         <li><span className="tc">04</span><b>Render</b><span>A 9:16 MP4, ready to post, with its title and description.</span></li>
       </ol>
+      <figure className="editor-shot">
+        <figcaption>
+          <span className="eyebrow">The editor</span>
+          <h3>One screen, from the talk to the short.</h3>
+          <ul>
+            <li><b>Transcript</b><span>Read, search and select by sentence; fix a word and the captions follow.</span></li>
+            <li><b>Video</b><span>The source, with the 9:16 frame the short takes. Drag it to reframe a camera.</span></li>
+            <li><b>Preview</b><span>The short at full height beside your settings: played as cut, a still as rendered, or the render.</span></li>
+            <li><b>Settings</b><span>Pauses, captions, the caption text word for word, framing, export and posting.</span></li>
+          </ul>
+          <p className="small muted">Every part folds away with its arrow when another needs the room. Changes undo with Ctrl+Z.</p>
+        </figcaption>
+        <img src="/editor.webp" alt="The editor: the transcript, the source video with its 9:16 frame, the preview of the short and the settings, side by side over the timeline" loading="lazy" width="1440" height="900" />
+      </figure>
     </section>
   );
 }
@@ -362,7 +376,7 @@ function EmptyLibrary({ onChoose }: { onChoose: () => void }) {
       <ul className="facts">
         <li><b>Pauses cut smoothly</b><span>Silences are found from the audio and blended with an optical-flow morph, so the speaker never jumps.</span></li>
         <li><b>The frame follows the speaker</b><span>A 9:16 window holds the speaker and switches on the exact frame the camera changes.</span></li>
-        <li><b>Captions that read right</b><span>Word-timed, right to left for Arabic, with harakat if you want them, or in English.</span></li>
+        <li><b>Captions that read right</b><span>Word-timed, right to left for Arabic, with harakat if you want them, in English, or both: Arabic with its English under it.</span></li>
         <li><b>Quran named on screen</b><span>While a verse is quoted, a small line above the captions names the surah and ayah.</span></li>
       </ul>
     </div>

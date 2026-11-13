@@ -91,7 +91,7 @@ function textCss(ts: TextStyle, k: number): React.CSSProperties {
   };
 }
 
-export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
+export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; overlay?: React.ReactNode }) {
   const s = ed.short!;
   const height = Math.round((width * 16) / 9);
   const segs = useMemo(() => ed.estimate?.segments ?? [], [ed.estimate]);
@@ -306,6 +306,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
           }}>{quranLabel(qRef!, tagLang)}</div>
         )}
         {s.title && titleStyle && <div className="q-cap" dir="auto" style={textCss(titleStyle, k)}>{s.title}</div>}
+        {overlay}
         {!playing && <div className="q-play" aria-hidden="true">▶</div>}
         {exact && (
           <div className="q-exact">
@@ -314,6 +315,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
           </div>
         )}
       </div>
+      <div className="q-controls">
       <input className="q-scrub" type="range" min={0} max={Math.max(0.1, total)} step={0.04} value={Math.min(outT, total)}
         aria-label="Position in the short" onChange={(e) => seekOut(+e.target.value)} />
       <div className="q-bar">
@@ -341,6 +343,7 @@ export function QuickPlayer({ ed, width }: { ed: Ed; width: number }) {
           </button>
         </details>
       )}
+      </div>
     </div>
   );
 }

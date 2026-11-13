@@ -502,7 +502,9 @@ def _framing_at(lid: str, frame: np.ndarray, W: int, H: int) -> tuple[float, flo
 
 def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom: float,
                   captions: bool, harakat: str = "all", caption_lang: str = "original",
-                  quran_tag: bool = True, caption_lang2: str | None = None) -> bytes:
+                  quran_tag: bool = True, caption_lang2: str | None = None, shown: dict | None = None) -> bytes:
+    """`shown`: the caption (and second line) a short has at t, see app._shown_at.
+    Without it the words said around t are captioned, whatever the short holds."""
     meta = store.get_lecture(lid)
     src = store.source_path(lid)
     W, H = meta["width"], meta["height"]
@@ -516,7 +518,12 @@ def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom:
 
     style = style_from_dict(style_data or {})
     chunks = []
-    if captions:
+    if captions and shown:
+        cur = shown["words"]
+        # the frame is the one asked for; the caption is drawn as it stands partway through
+        t = min(max(t, cur[0][1] + 0.2), max(cur[-1][2], cur[0][1] + 0.2))
+        chunks = [cur]
+    elif captions:
         words = load_words(src) if words_path(src).exists() else []
         if caption_lang != "original":
             try:
@@ -543,7 +550,10 @@ def preview_frame(lid: str, t: float, style_data: dict, title: str | None, zoom:
             w = min(qw, key=lambda w: 0 if w["s"] <= t <= w["e"] else min(abs(w["s"] - t), abs(w["e"] - t)))
             tags = [(t - 1, t + 1, quran_label(w.get("ayah") or w["quran"], lang))]
     sub = []
-    if captions and caption_lang2 and caption_lang == "original":
+    if captions and shown:
+        if shown["sub"]:
+            sub = [[(w, t - 1, t + 1) for w in shown["sub"].split()]]
+    elif captions and caption_lang2 and caption_lang == "original":
         from shorts.captions import sub_style
 
         try:

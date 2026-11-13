@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type Camera, type Caption, type CaptionEdits, type Post, type Range, type StyleData, type TextStyle } from "./api";
 import { exportSpeed, finalLength, type Ed } from "./Editor";
 import { QuickPlayer } from "./Quick";
@@ -23,11 +23,11 @@ function storedGuide(): Guide {
   return "off";
 }
 
-function SafeZone({ guide, width, height }: { guide: Guide; width: number; height: number }) {
+function SafeZone({ guide }: { guide: Guide }) {
   if (guide === "off") return null;
   const z = SAFE_ZONES[guide];
   return (
-    <div className="safe-zone" aria-hidden="true" style={{ width, height }}>
+    <div className="safe-zone" aria-hidden="true">
       <div className="safe-zone-box" style={{ top: `${z.top * 100}%`, bottom: `${z.bottom * 100}%`, left: `${z.left * 100}%`, right: `${z.right * 100}%` }}>
         <span>{z.name} safe area</span>
       </div>
@@ -35,6 +35,11 @@ function SafeZone({ guide, width, height }: { guide: Guide; width: number; heigh
   );
 }
 
+/**
+ * The 9:16 preview, in its own column: the cut played in the browser, a still
+ * as rendered, or the rendered video. Everything is stacked, so the player's
+ * controls push nothing out of the column.
+ */
 export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?: number }) {
   const s = ed.short;
   // preview a moment that is actually in the short when the playhead is elsewhere
@@ -47,9 +52,23 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
   const [loading, setLoading] = useState(false);
   const [guide, setGuideState] = useState<Guide>(storedGuide);
   const setGuide = (g: Guide) => { setGuideState(g); try { localStorage.setItem(GUIDE_KEY, g); } catch { /* storage unavailable */ } };
+  // the translation as it reads now, so an edit to it redraws the still
+  const trMark = useMemo(() => {
+    let h = 0;
+    for (const g of ed.translation?.segments ?? []) for (let i = 0; i < g.text.length; i++) h = (h * 31 + g.text.charCodeAt(i)) | 0;
+    return h;
+  }, [ed.translation]);
+  // with clips, the short itself goes along: the still then shows the caption the render has at that moment
+  const own = s?.ranges.length ? {
+    short_id: s.id, edits: s.caption_edits ?? null,
+    short: { name: s.name, ranges: s.ranges, title: s.title, style: s.style, style_data: s.style_data, min_gap: s.min_gap,
+      transition: s.transition, transition_frames: s.transition_frames, zoom: s.zoom, grade: s.grade, captions: s.captions,
+      speed: s.speed ?? 1, harakat: s.harakat ?? "all", caption_lang: s.caption_lang ?? "original", quran_tag: s.quran_tag ?? true,
+      follow: s.follow ?? "main", even_volume: s.even_volume ?? true, fit_to: s.fit_to ?? null, caption_lang2: s.caption_lang2 ?? null },
+  } : {};
   const key = useDebounced(JSON.stringify({ t: Math.round(t * 4) / 4, style: s?.style, style_data: s?.style_data,
     title: s?.title, zoom: s?.zoom, captions: s?.captions, harakat: s?.harakat, caption_lang: s?.caption_lang, quran_tag: s?.quran_tag,
-    caption_lang2: s?.caption_lang2 ?? null, tr: ed.translation ? 1 : 0 }), 350);
+    caption_lang2: s?.caption_lang2 ?? null, tr: trMark, words: ed.transcript?.words.length ?? 0, ...own }), 350);
 
   const sid = s?.id;
   useEffect(() => { setTab(pick()); }, [sid, ed.renderedVersion, s?.rendered]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -65,16 +84,28 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
   }, [key, tab, ed.lecture.id, sid]);
 
   const height = Math.round((width * 16) / 9);
+  const zone = <SafeZone guide={guide} />;
   return (
     <div className="preview">
-      <div className="seg small" role="tablist" aria-label="Preview">
-        <button type="button" role="tab" aria-selected={tab === "play"} disabled={!s?.ranges.length} onClick={() => setTab("play")}>Play cut</button>
-        <button type="button" role="tab" aria-selected={tab === "look"} onClick={() => setTab("look")}>Still at {fmt(t, 0)}</button>
-        <button type="button" role="tab" aria-selected={tab === "rendered"} disabled={!s?.rendered} onClick={() => setTab("rendered")}>Rendered</button>
+      <div className="preview-top">
+        <div className="seg small fill" role="tablist" aria-label="Preview">
+          <button type="button" role="tab" aria-selected={tab === "play"} disabled={!s?.ranges.length} title="Play the cut here, as it is now" onClick={() => setTab("play")}>Play cut</button>
+          <button type="button" role="tab" aria-selected={tab === "look"} title="One frame exactly as the render draws it, at the playhead" onClick={() => setTab("look")}>Still {fmt(t, 0)}</button>
+          <button type="button" role="tab" aria-selected={tab === "rendered"} disabled={!s?.rendered} title={s?.rendered ? "The rendered video" : "Render the short first"} onClick={() => setTab("rendered")}>Rendered</button>
+        </div>
+        <label className="guide-pick small">
+          <span>Safe area</span>
+          <select value={guide} onChange={(e) => setGuide(e.target.value as Guide)}>
+            <option value="off">Off</option>
+            {Object.entries(SAFE_ZONES).map(([k, z]) => <option key={k} value={k}>{z.name}</option>)}
+          </select>
+        </label>
+        {tab === "rendered" && s?.rendered && (
+          <a className="btn small" href={api.shortVideoUrl(ed.lecture.id, s.id) + "?download=true"} download>Download MP4</a>
+        )}
       </div>
       <div className="preview-stage">
-      <SafeZone guide={guide} width={width} height={height} />
-      {tab === "play" && s?.ranges.length ? <QuickPlayer ed={ed} width={width} /> : (
+      {tab === "play" && s?.ranges.length ? <QuickPlayer ed={ed} width={width} overlay={zone} /> : (
       <div className="phone-frame" style={{ width, height }}>
         {tab === "rendered" && s?.rendered ? (
           <video key={ed.renderedVersion} src={api.shortVideoUrl(ed.lecture.id, s.id, ed.renderedVersion)} ref={rememberVolume} controls playsInline />
@@ -83,18 +114,9 @@ export function Preview({ ed, t: at, width = 270 }: { ed: Ed; t: number; width?:
         ) : (
           <div className="ph">Loading preview…</div>
         )}
+        {zone}
       </div>)}
       </div>
-      <label className="guide-pick small">
-        <span>Safe area</span>
-        <select value={guide} onChange={(e) => setGuide(e.target.value as Guide)}>
-          <option value="off">Off</option>
-          {Object.entries(SAFE_ZONES).map(([k, z]) => <option key={k} value={k}>{z.name}</option>)}
-        </select>
-      </label>
-      {tab === "rendered" && s?.rendered && (
-        <a className="btn block" href={api.shortVideoUrl(ed.lecture.id, s.id) + "?download=true"} download>Download MP4</a>
-      )}
     </div>
   );
 }
@@ -720,6 +742,7 @@ export function CaptionTextPanel({ ed, time, onPlay, selKey, onSelKey }: {
 }) {
   const caps = ed.captions;
   const [draft, setDraft] = useState<string | null>(null);
+  const [trDraft, setTrDraft] = useState<{ k: number; text: string } | null>(null);  // a sentence of the translation being edited
   const [saving, setSaving] = useState(false);
   const list = useRef<HTMLOListElement>(null);
   const live = caps?.captions.find((c) => time >= c.src[0] && time < c.src[1])?.key ?? null;
@@ -728,13 +751,31 @@ export function CaptionTextPanel({ ed, time, onPlay, selKey, onSelKey }: {
     if (k == null) return;
     list.current?.querySelector(`[data-key="${k}"]`)?.scrollIntoView({ block: "nearest" });
   }, [live, selKey]);
-  useEffect(() => { setDraft(null); }, [selKey]);
+  useEffect(() => { setDraft(null); setTrDraft(null); }, [selKey]);
   if (!ed.short?.captions) return <p className="small muted pad">Captions are off for this short (Captions and look).</p>;
   if (!caps) return <p className="small muted pad">Working out the captions…</p>;
   if (!caps.captions.length) return <p className="small muted pad">Add a clip to see its captions.</p>;
   const edits = ed.short.caption_edits;
   const changed = !!edits && (edits.starts.length + edits.joins.length + Object.keys(edits.times).length > 0);
   const nWords = caps.captions.reduce((n, c) => n + c.words.length, 0);
+  // the second line (a translation under each caption): one sentence often spans
+  // several captions, so it is shown once, on the caption it first appears with
+  const subs = caps.sub ?? [];
+  const subOf = (c: Caption) => subs.find((x) => x.src[0] < c.src[1] && x.src[1] > c.src[0]) ?? null;
+  const otherLang = ed.translationLang === "en" ? "English" : "Arabic";
+  /** The transcript sentence a caption starts in: the translation is kept, and edited, sentence by sentence. */
+  const sentenceOf = (c: Caption) => {
+    const i = c.words.find((w) => w.i != null)?.i;
+    const k = i == null ? -1 : ed.transcript?.segments.findIndex((g) => g.w0 <= i && i < g.w1) ?? -1;
+    return k >= 0 && ed.translation?.segments[k] ? k : null;
+  };
+  const saveTr = async () => {
+    if (!trDraft || !trDraft.text.trim()) return;
+    setSaving(true);
+    await ed.editTranslation(trDraft.k, trDraft.text.trim());
+    setSaving(false);
+    setTrDraft(null);
+  };
 
   const save = async (c: Caption) => {
     const idx = c.words.map((w) => w.i);
@@ -748,7 +789,10 @@ export function CaptionTextPanel({ ed, time, onPlay, selKey, onSelKey }: {
   return (
     <div className="cap-list">
       <div className="row">
-        <span className="small muted">{caps.captions.length} captions · {nWords} words, exactly as rendered</span>
+        <span className="small muted">{caps.captions.length} captions · {nWords} words, exactly as rendered{subs.length ? ` · ${otherLang} line under them` : ""}</span>
+      </div>
+      <div className="row">
+        <span className="small muted">To split a caption, open it and click the <span aria-hidden="true">⁞</span> where the new one should start.</span>
         <span className="grow" />
         {changed && <button type="button" className="link small" onClick={() => ed.setCaptionEdits(NO_EDITS)}>Reset splits and timing</button>}
       </div>
@@ -757,16 +801,33 @@ export function CaptionTextPanel({ ed, time, onPlay, selKey, onSelKey }: {
         {caps.captions.map((c, n) => {
           const sel = c.key === selKey;
           const next = caps.captions[n + 1];
+          const sub = subOf(c);
+          const subLine = sub && (n === 0 || subOf(caps.captions[n - 1]) !== sub) ? sub.text : null;
+          // open, with more than one word: the words themselves are where it is split, so they are shown once, not twice
+          const splitting = sel && draft == null && c.words.length > 1;
           return (
             <li key={`${c.key}-${n}`} data-key={c.key} className={`cap-row ${sel ? "sel" : ""} ${c.key === live ? "live" : ""}`}>
               <button type="button" className="cap-main" onClick={() => { onSelKey(c.key); onPlay(c.src); }}
                 title="Play this caption">
                 <span className={`tc cap-time ${c.timed ? "timed" : ""}`}>{fmt(c.s, 1)}</span>
-                <span className="cap-text" dir="auto">{c.words.map((w) => w.w).join(" ")}</span>
+                <span className="cap-lines">
+                  {!splitting && <span className="cap-text" dir="auto">{c.words.map((w) => w.w).join(" ")}</span>}
+                  {subLine && <span className="cap-sub" dir="auto">{subLine}</span>}
+                </span>
               </button>
               {sel && (
                 <div className="cap-tools">
-                  {draft != null ? (
+                  {trDraft ? (
+                    <form className="cap-edit tr" onSubmit={(e) => { e.preventDefault(); saveTr(); }}>
+                      <textarea dir="auto" lang={ed.translationLang} autoFocus rows={Math.max(2, Math.ceil(trDraft.text.length / 34))} value={trDraft.text}
+                        disabled={saving} aria-label={`${otherLang} translation of this sentence`}
+                        onChange={(e) => setTrDraft({ k: trDraft.k, text: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setTrDraft(null); } if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveTr(); } }} />
+                      <button type="submit" className="btn small primary" disabled={saving || !trDraft.text.trim()}>Save</button>
+                      <button type="button" className="btn small" onClick={() => setTrDraft(null)}>Cancel</button>
+                      <span className="small muted">The whole sentence's {otherLang}; it is cut into lines to follow the speech.</span>
+                    </form>
+                  ) : draft != null ? (
                     <form className="cap-edit" onSubmit={(e) => { e.preventDefault(); save(c); }}>
                       <input dir="auto" autoFocus value={draft} disabled={saving} aria-label="Caption text"
                         onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setDraft(null)} />
@@ -776,7 +837,7 @@ export function CaptionTextPanel({ ed, time, onPlay, selKey, onSelKey }: {
                     </form>
                   ) : (
                     <>
-                      <span className="cap-split" dir="auto" aria-label="Click a word to start a new caption there">
+                      <span className="cap-split" dir="auto" hidden={!splitting} aria-label="This caption's words; the marks between them split it">
                         {c.words.map((w, k) => (
                           <span key={k}>
                             {k > 0 && (
@@ -791,6 +852,10 @@ export function CaptionTextPanel({ ed, time, onPlay, selKey, onSelKey }: {
                       <span className="row">
                         {caps.editable && c.words.every((w) => w.i != null) && (
                           <button type="button" className="btn small" onClick={() => setDraft(c.words.map((w) => w.raw).join(" "))}>Edit text</button>
+                        )}
+                        {subs.length > 0 && sentenceOf(c) != null && (
+                          <button type="button" className="btn small" title={`Fix the ${otherLang} of the sentence this caption is in`}
+                            onClick={() => { const k = sentenceOf(c)!; setTrDraft({ k, text: ed.translation!.segments[k].text }); }}>Edit {otherLang}</button>
                         )}
                         {next && (
                           <button type="button" className="btn small" title="Show this caption and the next one together"

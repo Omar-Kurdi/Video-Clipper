@@ -293,7 +293,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       .then((c) => live && setCaptions(c)).catch(() => live && setCaptions(null));
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedCaps, current?.id, transcript, captionsVersion, lectureId]);
+  }, [debouncedCaps, current?.id, transcript, translation, captionsVersion, lectureId]);
 
   const ed = useMemo<Ed | null>(() => {
     if (!lecture) return null;

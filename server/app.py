@@ -111,6 +111,10 @@ class PreviewIn(BaseModel):
     caption_lang: str = "original"
     quran_tag: bool = True
     caption_lang2: str | None = None
+    # the short being edited, as it is on screen: with it the still shows the
+    # caption the render shows at `t`, not just the words said around then
+    short_id: str | None = None
+    short: ShortIn | None = None
 
 
 class CutPreviewIn(ShortIn):
@@ -581,8 +585,41 @@ def lecture_estimate(lid: str, body: ShortIn):
 def lecture_preview(lid: str, body: PreviewIn):
     jpg = media.preview_frame(lid, body.t, _style_data(body.style, body.style_data),
                               body.title, body.zoom, body.captions, body.harakat, body.caption_lang,
-                              body.quran_tag, body.caption_lang2)
+                              body.quran_tag, body.caption_lang2, _shown_at(lid, body))
     return Response(jpg, media_type="image/jpeg")
+
+
+def _shown_at(lid: str, body: PreviewIn) -> dict | None:
+    """The short's own caption (and second line) at body.t, as the render has
+    them: {"words": [(text, start, end)], "sub": str | None}. None when the
+    still is not of a short's clip, and the words around `t` are shown instead."""
+    from shorts.pipeline import caption_list
+
+    if not (body.captions and body.short and body.short.ranges):
+        return None
+    s = body.short.model_dump()
+    if body.short_id:
+        try:
+            s = {**store.get_short(lid, body.short_id), **s}  # its caption splits, joins and timing
+        except Exception:
+            pass
+    try:
+        listed = caption_list(store.source_path(lid), _options(store.get_lecture(lid), s))
+    except Exception:
+        return None
+    caps = listed["captions"]
+    if not caps:
+        return None
+    t = body.t
+    # the caption on screen at t; between two captions, the nearer one (a still with no caption shows nothing of the look)
+    cap = min(caps, key=lambda c: 0 if c["src"][0] <= t <= c["src"][1] else min(abs(c["src"][0] - t), abs(c["src"][1] - t)))
+    words = [(w["w"], w["t"], w["e"]) for w in cap["words"]]
+    if cap["timed"]:
+        words[0] = (words[0][0], cap["src"][0], words[0][2])
+        words[-1] = (words[-1][0], words[-1][1], cap["src"][1])
+    at = min(max(t, cap["src"][0]), cap["src"][1])
+    sub = next((x["text"] for x in listed.get("sub", []) if x["src"][0] <= at <= x["src"][1] + 0.3), None)
+    return {"words": words, "sub": sub}
 
 
 class FramingIn(BaseModel):

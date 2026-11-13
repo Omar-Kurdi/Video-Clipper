@@ -23,7 +23,7 @@ const SECTION_KEY = "settings-section";
 const WORD_LEN_KEY = "word-lengths";
 /** A word said for this long (seconds) or longer is drawn-out: its bar is full width and marked. */
 const LONG_WORD = 1;
-const PREVIEW_KEY = "preview-hidden";
+const FOLD_KEY = "folded-sections";
 
 function storedSection(): Section {
   try {
@@ -32,16 +32,44 @@ function storedSection(): Section {
   } catch { return "look"; }
 }
 
-/** Preview width that leaves room for the settings above it on short screens. */
-function usePreviewWidth() {
-  const calc = () => Math.round(Math.min(170, Math.max(110, ((window.innerHeight - 640) * 9) / 16)));
-  const [w, setW] = useState(calc);
+/** The parts of the editor that fold away to give the others their room. */
+type Part = "transcript" | "source" | "timeline" | "preview" | "side";
+const PART_NAME: Record<Part, string> = { transcript: "Transcript", source: "Video", timeline: "Timeline", preview: "Preview", side: "Settings" };
+const NONE_FOLDED: Record<Part, boolean> = { transcript: false, source: false, timeline: false, preview: false, side: false };
+
+/** The preview's picture: as tall as the editor allows beside its controls, up to 400 wide. */
+function usePreviewWidth(ref: React.RefObject<HTMLElement>) {
+  const [w, setW] = useState(240);
   useEffect(() => {
-    const on = () => setW(calc());
-    window.addEventListener("resize", on);
-    return () => window.removeEventListener("resize", on);
-  }, []);
+    const el = ref.current;
+    if (!el) return;
+    const fit = (h: number) => setW(Math.round(clamp(((h - 262) * 9) / 16, 150, Math.min(400, window.innerWidth * 0.22))));
+    fit(el.clientHeight);
+    const ro = new ResizeObserver(([e]) => fit(e.contentRect.height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
   return w;
+}
+
+/** The arrow that folds a section away. `to`: the side it folds towards. */
+function FoldButton({ part, to, onFold }: { part: Part; to: "left" | "right"; onFold: () => void }) {
+  return (
+    <button type="button" className="icon fold" aria-label={`Hide ${PART_NAME[part].toLowerCase()}`}
+      title={`Hide ${PART_NAME[part].toLowerCase()} to give the rest more room`} onClick={onFold}>
+      {to === "left" ? "«" : "»"}
+    </button>
+  );
+}
+
+/** A folded section: a thin strip that brings it back. */
+function FoldStrip({ part, from, onOpen }: { part: Part; from: "left" | "right"; onOpen: () => void }) {
+  return (
+    <button type="button" className="fold-strip" aria-label={`Show ${PART_NAME[part].toLowerCase()}`} title={`Show ${PART_NAME[part].toLowerCase()}`} onClick={onOpen}>
+      <span aria-hidden="true">{from === "left" ? "»" : "«"}</span>
+      <b>{PART_NAME[part]}</b>
+    </button>
+  );
 }
 
 /**
@@ -59,15 +87,35 @@ export function Workspace({ ed }: { ed: Ed }) {
   const [view, setView] = useState<Range>([0, Math.min(duration || 120, 120)]);
   const [capKey, setCapKey] = useState<number | null>(null);  // the caption picked in the list or on the timeline
   const [section, setSection] = useState<Section>(storedSection);
+  const foldedRef = useRef(NONE_FOLDED);
+  const foldRef = useRef<(part: Part, v: boolean) => void>(() => {});
   const setOpen = (v: Section) => {
     setSection(v);
+    if (foldedRef.current.side) foldRef.current("side", false);
     try { localStorage.setItem(SECTION_KEY, v); } catch { /* storage unavailable */ }
   };
-  const [previewHidden, setPreviewHiddenState] = useState(() => { try { return localStorage.getItem(PREVIEW_KEY) === "1"; } catch { return false; } });
-  const setPreviewHidden = (v: boolean) => {
-    setPreviewHiddenState(v);
-    try { localStorage.setItem(PREVIEW_KEY, v ? "1" : ""); } catch { /* storage unavailable */ }
+  // any section folds away, and stays folded between visits
+  const [folded, setFolded] = useState<Record<Part, boolean>>(() => ({ ...NONE_FOLDED, ...storage<Partial<Record<Part, boolean>>>(FOLD_KEY, {}) }));
+  const fold = (part: Part, v: boolean) => {
+    setFolded((now) => {
+      const next = { ...now, [part]: v };
+      store(FOLD_KEY, next);
+      return next;
+    });
+    if (part === "source" && v) video.current?.pause();
   };
+  foldedRef.current = folded;
+  foldRef.current = fold;
+  const gridRef = useRef<HTMLDivElement>(null);
+  const previewWidth = usePreviewWidth(gridRef);
+  // the columns: a folded one is a strip; the room it leaves goes to the video, else the transcript, else the preview
+  const strip = "30px";
+  const cols = [
+    folded.transcript ? strip : folded.source ? "minmax(0, 1fr)" : "minmax(260px, 22%)",
+    folded.source ? strip : "minmax(0, 1fr)",
+    folded.preview ? strip : folded.transcript && folded.source ? "minmax(0, 1fr)" : `${Math.max(previewWidth + 32, 302)}px`,
+    folded.side ? "62px" : folded.transcript && folded.source && folded.preview ? "minmax(384px, 1fr)" : "384px",
+  ].join(" ");
   const ce = ed.short?.caption_edits;
   const captionsEdited = !!ce && (ce.starts.length > 0 || ce.joins.length > 0 || Object.keys(ce.times).length > 0);
   // a render just finished: show what to post it with
@@ -78,7 +126,6 @@ export function Workspace({ ed }: { ed: Ed }) {
     if (renderedAt && seen.id === ed.short?.id && renderedAt !== seen.at) setOpen("post");
     seenRender.current = { id: ed.short?.id, at: renderedAt };
   }, [renderedAt, ed.short?.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  const previewWidth = usePreviewWidth();
   const [rate, setRate] = useState(1);
   useEffect(() => { if (video.current) { video.current.playbackRate = rate; video.current.preservesPitch = true; } }, [rate]);
   const stopAt = useRef<number | null>(null);
@@ -227,11 +274,16 @@ export function Workspace({ ed }: { ed: Ed }) {
   return (
     <div className="app ws">
       <TopBar ed={ed} />
-      <div className="ws-grid">
+      <div className="ws-grid" ref={gridRef} style={{ "--cols": cols } as CSSProperties}>
         <TranscriptPanel ed={ed} time={time} playing={playing} sel={sel} onSelect={select} seek={seek}
-          play={() => video.current?.play()} />
+          play={() => video.current?.play()} folded={folded.transcript} onFold={(v) => fold("transcript", v)} />
 
-        <section className="source" aria-label="Video">
+        <section className={`source ${folded.source ? "folded" : ""}`} aria-label="Video">
+          {folded.source && <FoldStrip part="source" from="left" onOpen={() => fold("source", false)} />}
+          <div className="sec-head">
+            <b>Video</b><span className="muted small">the source, with the 9:16 frame the short takes</span>
+            <span className="grow" /><FoldButton part="source" to="left" onFold={() => fold("source", true)} />
+          </div>
           <div className="player" style={{
             // exactly the video's shape, so the 9:16 frame lines up with the picture
             aspectRatio: `${ed.lecture.width ?? 16} / ${ed.lecture.height ?? 9}`,
@@ -277,7 +329,7 @@ export function Workspace({ ed }: { ed: Ed }) {
           </div>
         </section>
 
-        <section className="tl" aria-label="Timeline">
+        <section className={`tl ${folded.timeline ? "folded" : ""}`} aria-label="Timeline">
           <div className="tl-head">
             <b title="Drag to select · click to seek · drag along the times at the top to scrub · scroll to move · Ctrl+scroll to zoom">Timeline</b>
             {/* always here, so selecting never moves the layout */}
@@ -294,6 +346,9 @@ export function Workspace({ ed }: { ed: Ed }) {
             <span className="legend"><i className="lg-pause" />Pause, cut</span>
             <button type="button" className="btn small sq" aria-label="Zoom out" onClick={() => zoomTo(span * 1.6)}>−</button>
             <button type="button" className="btn small sq" aria-label="Zoom in" onClick={() => zoomTo(span / 1.6)}>+</button>
+            <button type="button" className="icon fold" aria-expanded={!folded.timeline} aria-label={folded.timeline ? "Show timeline" : "Hide timeline"}
+              title={folded.timeline ? "Show the timeline" : "Hide the timeline to give the rest more room"}
+              onClick={() => fold("timeline", !folded.timeline)}>{folded.timeline ? "⌃" : "⌄"}</button>
           </div>
           <Timeline duration={duration} peaks={ed.waveform} speech={ed.speech} minGap={ed.estimate?.fit?.min_gap ?? s?.min_gap ?? 0.4}
             ranges={s?.ranges ?? []} selection={sel} time={time} view={view} onView={setView}
@@ -305,7 +360,16 @@ export function Workspace({ ed }: { ed: Ed }) {
           <ClipStrip ed={ed} onPlay={playRange} />
         </section>
 
-        <aside className="side" aria-label="Preview and settings">
+        <section className={`preview-col ${folded.preview ? "folded" : ""}`} aria-label="Preview">
+          {folded.preview && <FoldStrip part="preview" from="right" onOpen={() => fold("preview", false)} />}
+          <div className="sec-head">
+            <b>Preview</b><span className="muted small">the short as it will look</span>
+            <span className="grow" /><FoldButton part="preview" to="right" onFold={() => fold("preview", true)} />
+          </div>
+          {!folded.preview && <Preview ed={ed} t={time} width={previewWidth} />}
+        </section>
+
+        <aside className={`side ${folded.side ? "folded" : ""}`} aria-label="Settings">
           <nav className="rail" aria-label="Settings sections">
             {SECTIONS.map((sec) => (
               <button key={sec} type="button" aria-current={section === sec ? "true" : undefined} aria-controls="settings-panel"
@@ -315,11 +379,14 @@ export function Workspace({ ed }: { ed: Ed }) {
                 {sec === "text" && captionsEdited && <i className="rail-dot" title="Has your own caption splits or timing" />}
               </button>
             ))}
+            <span className="grow" />
+            {folded.side && <button type="button" className="rail-fold" aria-label="Show settings" title="Show the settings" onClick={() => fold("side", false)}>«</button>}
           </nav>
           <div className="side-main">
             <div className="side-title">
               <h3>{SECTION_NAME[section]}</h3>
               <span dir="auto">{summary(ed, section)}</span>
+              <FoldButton part="side" to="right" onFold={() => fold("side", true)} />
             </div>
             <div className="side-body" id="settings-panel" role="region" aria-label={SECTION_NAME[section]}>
               {section === "pauses" && <PausesPanel ed={ed} />}
@@ -331,10 +398,6 @@ export function Workspace({ ed }: { ed: Ed }) {
             </div>
             <div className="dock">
               <Stats ed={ed} />
-              <button type="button" className="dock-bar" aria-expanded={!previewHidden} onClick={() => setPreviewHidden(!previewHidden)}>
-                <b>Preview</b><span>{previewHidden ? "▸ show" : "▾ hide"}</span>
-              </button>
-              {!previewHidden && <Preview ed={ed} t={time} width={previewWidth} />}
             </div>
           </div>
         </aside>
@@ -345,9 +408,9 @@ export function Workspace({ ed }: { ed: Ed }) {
 
 /* ---------------- transcript ---------------- */
 
-function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
+function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play, folded, onFold }: {
   ed: Ed; time: number; playing: boolean; sel: Range | null; onSelect: (r: Range | null) => void;
-  seek: (t: number) => void; play: () => void;
+  seek: (t: number) => void; play: () => void; folded: boolean; onFold: (v: boolean) => void;
 }) {
   const tr = ed.transcript;
   const s = ed.short;
@@ -592,7 +655,12 @@ function TranscriptPanel({ ed, time, playing, sel, onSelect, seek, play }: {
   const rtl = ["ar", "fa", "ur", "he"].includes(lang);
 
   return (
-    <section className="transcript-panel" aria-label="Transcript">
+    <section className={`transcript-panel ${folded ? "folded" : ""}`} aria-label="Transcript">
+      {folded && <FoldStrip part="transcript" from="left" onOpen={() => onFold(false)} />}
+      <div className="sec-head">
+        <b>Transcript</b>
+        <span className="grow" /><FoldButton part="transcript" to="left" onFold={() => onFold(true)} />
+      </div>
       {!tr ? (
         <div className="no-transcript">
           <h2>No transcript yet</h2>

@@ -125,8 +125,17 @@ def map_words(words: list[dict], segs: list[Segment], fps: Fraction, d: int,
         a, b = bounds[best]
         base = float(starts[best] / fps)
         out.append((w["w"], base + max(w["s"], a) - a, base + min(w["e"], b) - a, w.get("_i"), w["s"], w["e"]))
-    out.sort(key=lambda x: x[1])
-    return out
+    # The words stay in the order they were given (the order they are said or
+    # read). Sorting by time swapped words around a cut: the two sides overlap
+    # by the blend, and a word moved out of a removed pause lands on the cut
+    # itself, so "ibn Rabi'ah" came out as "Rabi'ah, ibn". A translation's
+    # words, spread evenly over their sentence, fall in pauses all the time.
+    kept, last = [], 0.0
+    for w in out:
+        s = max(w[1], last)
+        kept.append((w[0], s, max(w[2], s), *w[3:]))
+        last = s
+    return kept
 
 
 def to_output(t: float, segs: list[Segment], fps: Fraction, d: int) -> float:
