@@ -8,7 +8,8 @@
  * with SHORTS_DATA pointing at an empty folder, for the first-visit page.
  * Playwright is not a dependency of the app: `npm i --no-save playwright`
  * somewhere and name its index.mjs in PLAYWRIGHT; CHROMIUM names another
- * Chromium build. The screens it opens change nothing in the library.
+ * Chromium build. FIRST and SECOND name the videos (ids) for the editor
+ * shots. The screens it opens change nothing in the library.
  * Videos land in <out dir>/video; cut them into GIFs with ffmpeg (see the end).
  */
 import { mkdirSync } from "node:fs";
@@ -64,7 +65,9 @@ for (const l of lectures) {
   if (shorts.length && l.has_transcript) withShort.push({ l, s: shorts[0] });
 }
 if (withShort.length < 1) throw new Error("The library needs a transcribed video with a rendered short.");
-const first = withShort[0], second = withShort[1] ?? first;
+// FIRST / SECOND: video ids to use instead of the first two with a rendered short
+const pick = (id) => withShort.find((x) => x.l.id === id);
+const first = pick(process.env.FIRST) ?? withShort[0], second = pick(process.env.SECOND) ?? withShort[1] ?? first;
 const hash = ({ l, s }) => `#/l/${l.id}/edit/${s.id}`;
 
 { // the library

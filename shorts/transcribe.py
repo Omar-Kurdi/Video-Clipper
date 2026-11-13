@@ -7,11 +7,30 @@ from typing import Callable
 from .util import default_device, fmt_time
 
 
+def _load_cuda12() -> None:
+    """CTranslate2 needs CUDA 12's cuBLAS and cuDNN. They come from the
+    nvidia-*-cu12 packages, but nothing puts them on the library path (a torch
+    built for CUDA 13 doesn't load them), so load them here by full path."""
+    import ctypes
+    import importlib.util
+
+    for pkg, libs in (("nvidia.cublas", ("libcublasLt.so.12", "libcublas.so.12")),
+                      ("nvidia.cudnn", ("libcudnn.so.9",))):
+        spec = importlib.util.find_spec(pkg)
+        for root in (spec.submodule_search_locations or []) if spec else []:
+            for name in libs:
+                lib = Path(root) / "lib" / name
+                if lib.exists():
+                    ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
+
+
 @lru_cache(maxsize=1)
 def _model(model: str, device: str, compute: str | None = None):
     """Loaded once per process (the web server reuses it between jobs)."""
     from faster_whisper import WhisperModel
 
+    if device == "cuda":
+        _load_cuda12()
     return WhisperModel(model, device=device, compute_type=compute or ("float16" if device == "cuda" else "int8"))
 
 
