@@ -101,9 +101,12 @@ def _quran():
             n = norm(t)
             if n:
                 tokens.append((n, t, s, a))
+    # a word with a small (dagger) alif is also found as ordinarily spelt: لُقْمَٰنَ as لقمان
+    spell = [{n} | ({norm(t.replace("\u0670", "ا"))} if "\u0670" in t else set()) for n, t, _, _ in tokens]
     index = defaultdict(list)
     for i in range(len(tokens) - 2):
-        index[(tokens[i][0], tokens[i + 1][0], tokens[i + 2][0])].append(i)
+        for key in product(spell[i], spell[i + 1], spell[i + 2]):
+            index[key].append(i)
     return tokens, index
 
 
@@ -115,48 +118,61 @@ def _same(word: str, tok) -> bool:
     return "\u0670" in tok[1] and _close(word, norm(tok[1].replace("\u0670", "ا")))
 
 
-def _step(cands: list[list[str]], wi: int, toks, qi: int, back: bool = False) -> int:
-    """How many spoken words (1 or 2) make mushaf word qi, ending/starting at
-    word wi; 0 if they don't match."""
+def _step(cands: list[list[str]], wi: int, toks, qi: int, back: bool = False) -> tuple[int, int]:
+    """How many spoken words and mushaf words match, ending/starting at word wi
+    and mushaf word qi: (1, 1); (2, 1) when two spoken words make one mushaf
+    word (يا موسى = يَٰمُوسَىٰ); (1, 2) when the recogniser wrote two mushaf
+    words as one (أَنِ اشْكُرْ heard as أنشكر). (0, 0) if they don't match."""
     if any(_same(c, toks[qi]) for c in cands[wi]):
-        return 1
+        return 1, 1
     o = wi - 1 if back else wi + 1
     if 0 <= o < len(cands):
         for a in cands[o] if back else cands[wi]:
             for b in cands[wi] if back else cands[o]:
                 if _same(a + b, toks[qi]):
-                    return 2
-    return 0
+                    return 2, 1
+    q2 = qi - 1 if back else qi + 1
+    if 0 <= q2 < len(toks) and toks[q2][2] == toks[qi][2]:
+        pair = (toks[q2], toks[qi]) if back else (toks[qi], toks[q2])
+        joined = (pair[0][0] + pair[1][0], pair[0][1] + pair[1][1])
+        if any(_same(c, joined) for c in cands[wi] if len(c) >= 4):
+            return 1, 2
+    return 0, 0
 
 
 def _extend(cands: list[list[str]], i: int, toks, p: int, back: bool = False) -> list[tuple[int, int, int, int]]:
     """Run of matching words from transcript word i / Quran token p (forwards,
     or backwards from just before them), as (first word, end word, first token,
     number of tokens). A word matches if any reading of it does (what the
-    recognisers heard, cands[i]); a misheard word (one letter off) is fine, and
-    two spoken words may make one mushaf word (يا موسى = يَٰمُوسَىٰ). A stretch
-    that doesn't match (1-2 words for 1-2 mushaf words, e.g. أجرهم heard for
-    أَجَلٍ هُم) is taken as misheard only if the next two words match again;
-    otherwise the run ends, so a lecturer's own words inside a quotation are
-    never overwritten."""
+    recognisers heard, cands[i]); a misheard word (one letter off) is fine, two
+    spoken words may make one mushaf word (يا موسى = يَٰمُوسَىٰ) and one may
+    make two (أنشكر = أَنِ ٱشْكُرْ). A stretch that doesn't match (1-2 words
+    for 1-2 mushaf words, e.g. أجرهم heard for أَجَلٍ هُم) is taken as misheard
+    only if the next two words match again; otherwise the run ends, so a
+    lecturer's own words inside a quotation are never overwritten. A run stays
+    within one surah: the end of one and the start of the next are not one quotation."""
     d = -1 if back else 1
     pairs: list[tuple[int, int, int, int]] = []
     wi, qi = (i - 1, p - 1) if back else (i, p)
+    surah = toks[p][2] if 0 <= p < len(toks) else None
 
-    def ok(wi: int, qi: int) -> int:
-        return _step(cands, wi, toks, qi, back) if 0 <= wi < len(cands) and 0 <= qi < len(toks) else 0
+    def ok(wi: int, qi: int) -> tuple[int, int]:
+        if not (0 <= wi < len(cands) and 0 <= qi < len(toks)) or toks[qi][2] != surah:
+            return 0, 0
+        return _step(cands, wi, toks, qi, back)
 
     def anchored(wi: int, qi: int) -> bool:  # the next two mushaf words match from here
-        n = ok(wi, qi)
-        return bool(n) and bool(ok(wi + d * n, qi + d))
+        n, nq = ok(wi, qi)
+        return bool(n) and bool(ok(wi + d * n, qi + d * nq)[0])
 
     while 0 <= wi < len(cands) and 0 <= qi < len(toks):
-        n, nq = ok(wi, qi), 1
+        n, nq = ok(wi, qi)
         if not n:
             if not pairs:
                 break
             gap = next(((nw, nt) for nw, nt in ((1, 1), (1, 2), (2, 1))
-                        if 0 <= wi + d * (nw - 1) < len(cands) and anchored(wi + d * nw, qi + d * nt)), None)
+                        if 0 <= wi + d * (nw - 1) < len(cands) and 0 <= qi + d * (nt - 1) < len(toks)
+                        and toks[qi + d * (nt - 1)][2] == surah and anchored(wi + d * nw, qi + d * nt)), None)
             if gap is None:
                 break
             n, nq = gap
@@ -168,6 +184,15 @@ def _extend(cands: list[list[str]], i: int, toks, p: int, back: bool = False) ->
 
 
 BASMALA = [norm(w) for w in "بسم الله الرحمن الرحيم".split()]
+# a lesson or a sermon opens with these words, then blessings on the Prophet: an opening, not a recitation
+OPENING = {norm(w) for w in "بسم الله الرحمن الرحيم الحمد لله رب العالمين".split()}
+BLESSINGS = {norm(w) for w in "والصلاة الصلاة وصلى صلى".split()}
+
+
+def _opening(nw: list[str], w0: int, w1: int) -> bool:
+    """Words w0..w1 are only the basmala and «الحمد لله رب العالمين», and
+    blessings on the Prophet follow right after."""
+    return all(w in OPENING for w in nw[w0:w1]) and any(w in BLESSINGS for w in nw[w1:w1 + 3])
 MIN_QURAN, MIN_QURAN_CUED = 5, 3
 
 
@@ -203,6 +228,10 @@ def _merge_runs(toks, spans: list[dict]) -> list[dict]:
                 merged = _quran_span(toks, pa + fill + pb)
                 if prev.get("keep_spoken") or sp.get("keep_spoken"):
                     merged["keep_spoken"] = True
+                if prev.get("unsure") or sp.get("unsure"):
+                    merged["unsure"] = prev.get("unsure", []) + sp.get("unsure", [])
+                if prev["ref"].startswith("~") or sp["ref"].startswith("~"):
+                    merged.update(ref="~" + merged["ref"].lstrip("~"), url=None)
                 out[-1] = merged
                 continue
         out.append(sp)
@@ -212,9 +241,11 @@ def _merge_runs(toks, spans: list[dict]) -> list[dict]:
 @lru_cache(maxsize=1)
 def _bigrams() -> dict[tuple[str, str], list[int]]:
     toks = _quran()[0]
+    spell = [{n} | ({norm(t.replace("\u0670", "ا"))} if "\u0670" in t else set()) for n, t, _, _ in toks]
     out: dict[tuple[str, str], list[int]] = defaultdict(list)
     for k in range(len(toks) - 1):
-        out[(toks[k][0], toks[k + 1][0])].append(k)
+        for key in product(spell[k], spell[k + 1]):
+            out[key].append(k)
     return out
 
 
@@ -236,25 +267,45 @@ def _short_ayahs() -> dict[tuple[str, str], list[int]]:
 CUE_REACH = 6  # a quotation may start this many words after a cue
 
 
-def _places(toks, options: list[list[tuple[int, int, int, int]]]) -> tuple[list, int, bool]:
+def _places(toks, options: list[list[tuple[int, int, int, int]]],
+            prefer: frozenset[int] = frozenset()) -> tuple[list, int, list[list[int]]]:
     """The longest of the candidate runs, how many different places in the Quran
-    it fits equally well, and whether the mushaf text is the same in all of them."""
+    it fits equally well, and the spoken words whose mushaf text differs between
+    those places ([first word, end word], e.g. الٓر / الٓمٓ before the same
+    words in Yunus and Luqman). A place in a surah the lecture is about
+    (`prefer`, from its title) wins over the others."""
     n = max(len(o) for o in options)
     top = [o for o in options if len(o) == n]
-    starts = {o[0][2] for o in top}
-    texts = {tuple(toks[q][1] for _, _, q, _ in o) for o in top}
-    return top[0], len(starts), len(texts) == 1
+    mine = [o for o in top if toks[o[0][2]][2] in prefer]
+    if mine and len({o[0][2] for o in mine}) < len({o[0][2] for o in top}):
+        top = mine
+    best = top[0]
+    # the same letters are the same words, whatever marks one copy of a verse has that another doesn't
+    text = lambda o: {(a, b): "".join(toks[q + k][0] for k in range(nq)) for a, b, q, nq in o}  # noqa: E731
+    mine_text, others = text(best), [text(o) for o in top[1:]]
+    unsure = [[a, b] for (a, b), t in mine_text.items() if any(o.get((a, b)) != t for o in others)]
+    return best, len({o[0][2] for o in top}), unsure
 
 
-def find_quran(words: list[str], alts: list[list[str]] | None = None) -> list[dict]:
+def surahs_named(title: str | None) -> frozenset[int]:
+    """Surahs a lecture's title says it is about («تفسير سورة لقمان»)."""
+    t = norm((title or "").replace(" ", ""))
+    return frozenset(k + 1 for k, name in enumerate(SURAH_NAMES)
+                     if any(cue + norm(name) in t for cue in ("سوره", "تفسير")))
+
+
+def find_quran(words: list[str], alts: list[list[str]] | None = None,
+               prefer: frozenset[int] = frozenset()) -> list[dict]:
     """Quran spans in a list of transcript words (as spoken). alts[i]: other
     readings of word i (what the other recognisers heard), also tried.
 
     Without a cue, a quotation needs 5+ matching words (or a basmala). Right
     after a cue («قال تعالى», «قال ربنا», ...) any 2+ words that continue the
-    mushaf count. If they fit several places equally, the span is still Quran
-    but no surah/ayah is claimed (ref starts with "~"), and the mushaf text is
-    only applied if it reads the same in all of them."""
+    mushaf count. If they fit several places equally (and the lecture's own
+    surah, `prefer`, isn't one of them), the span is still Quran but no
+    surah/ayah is claimed (ref starts with "~"), and words whose mushaf text
+    differs between the places are left unmarked ("unsure"): text on screen
+    marked as Quran is always the mushaf's."""
     toks, index = _quran()
     bigrams = _bigrams()
     nw = [norm(w) for w in words]
@@ -271,7 +322,8 @@ def find_quran(words: list[str], alts: list[list[str]] | None = None) -> list[di
                 pairs = [x for x in _extend(cands, i, toks, p, back=True) if x[0] >= start] + pairs
                 options.append(pairs)
         # a cue introduces the first quotation after it, not whatever follows that one
-        cued = any(0 <= i - c <= CUE_REACH and not (out and out[-1]["w0"] >= c) for c in cue_at)
+        # (one that ends past the cue used it, even if it began with the cue: a basmala)
+        cued = any(0 <= i - c <= CUE_REACH and not (out and out[-1]["w1"] > c) for c in cue_at)
         if cued:  # after a cue, two words are enough to look
             for p in bigrams.get((nw[i], nw[i + 1]), [])[:3000]:
                 pairs = _extend(cands, i, toks, p)
@@ -282,16 +334,25 @@ def find_quran(words: list[str], alts: list[list[str]] | None = None) -> list[di
             pairs = _extend(cands, i, toks, out[-1]["_pairs"][0][2])
             if len(pairs) >= 2:
                 options.append(pairs)
-        best, places, same = _places(toks, options) if options else (None, 0, True)
+        best, places, unsure = _places(toks, options, prefer) if options else (None, 0, [])
         basmala = nw[i:i + 4] == BASMALA
         again = repeat and best is not None and best[0][2] == out[-1]["_pairs"][0][2]
-        if best and (len(best) >= MIN_QURAN or ((cued or again) and len(best) >= 2) or (basmala and len(best) >= 4)):
+        # two words that fit several places («هذا من», «رضي الله») say nothing about being a quotation
+        vague = places > 1 and not again and len(best) < 3
+        if best and not vague and len(best) < MIN_QURAN and not again:
+            # a short match (allowed after a cue) gives way to a longer quotation starting inside it
+            longer = lambda j: max((len(_extend(cands, j, toks, p)) for p in index.get(tuple(nw[j:j + 3]), [])[:200]),  # noqa: E731
+                                   default=0)
+            vague = any(longer(j) > len(best) for j in range(i + 1, min(best[-1][1] + 1, len(nw) - 2)))
+        if best and not vague and not _opening(nw, best[0][0], best[-1][1]) and (
+                len(best) >= MIN_QURAN or ((cued or again) and len(best) >= 2) or (basmala and len(best) >= 4)):
             sp = _quran_span(toks, best)
             if places > 1 and not again:
                 sp["ref"] = "~" + sp["ref"]  # Quran, but which surah/ayah can't be told
                 sp["places"] = places
                 sp["url"] = None
-                sp["keep_spoken"] = not same
+                if unsure:
+                    sp["unsure"] = unsure
             if any(sp["w0"] - 10 <= c <= sp["w1"] for c in qiraat_at):
                 sp["keep_spoken"] = True
             out.append(sp)
@@ -557,29 +618,37 @@ def _hadith_span(row: dict, w0: int, w1: int, score: int, cued: bool) -> dict:
             "cued": cued}
 
 
-def find_sources(words: list[str], alts: list[list[str]] | None = None) -> list[dict]:
-    quran = find_quran(words, alts)
+def find_sources(words: list[str], alts: list[list[str]] | None = None,
+                 prefer: frozenset[int] = frozenset()) -> list[dict]:
+    quran = find_quran(words, alts, prefer)
     return sorted(quran + find_hadith(words, quran, alts), key=lambda o: o["w0"])
 
 
 def apply_quran(words: list[dict], spans: list[dict]) -> int:
     """Replace recognised Quran quotations with the exact mushaf text (word for
     word, keeping timings). Where two spoken words make one mushaf word, the
-    second is marked "_drop" (see annotate). Returns the number of words replaced."""
+    second is marked "_drop" (see annotate). Words marked as Quran always show
+    the mushaf's text: those whose text differs between the places a quotation
+    fits ("unsure") are left unmarked, and in a reading the lecturer chose
+    (keep_spoken) only words that are the mushaf's, letter for letter, keep
+    the lecturer's harakat. Returns the number of words replaced."""
     n = 0
     for sp in spans:
         if sp["type"] != "quran":
             continue
+        unsure = {tuple(x) for x in sp.get("unsure", [])}
         for a, b, tok, ayah in sp["map"]:
+            if (a, b) in unsure:
+                continue  # which mushaf words were said here can't be told: not shown as Quran
             if sp["ref"].startswith("~"):
                 ayah = sp["ref"]  # which ayah can't be told either
-            if sp.get("keep_spoken"):  # a reading the lecturer chose, or text that differs between places
-                for x in words[a:b]:
+            spoken = " ".join(x.get("spoken", x["w"]) for x in words[a:b])
+            if sp.get("keep_spoken") and _same(norm(spoken), (norm(tok), tok)):
+                for x in words[a:b]:  # the lecturer's own harakat (a reading they discuss)
                     x["quran"], x["ayah"] = sp["ref"], ayah
                     x.pop("flag", None)
                 continue
             w = words[a]
-            spoken = " ".join(x.get("spoken", x["w"]) for x in words[a:b])
             if w["w"] != tok or b - a > 1:
                 w.setdefault("spoken", spoken)
                 w["w"] = tok
@@ -687,7 +756,7 @@ def _drop_words(data: dict, spans: list[dict]) -> None:
         g["w0"], g["w1"] = new_index[g["w0"]], new_index[g["w1"]]
 
 
-SOURCES_VERSION = 9  # bump when matching improves: older transcripts are checked again when opened
+SOURCES_VERSION = 10  # bump when matching improves: older transcripts are checked again when opened
 
 
 def annotate(data: dict) -> dict:
@@ -704,7 +773,7 @@ def annotate(data: dict) -> dict:
             w.pop("hadith", None)
     words = data["words"]
     alts = [list(w.get("alts", [])) + ([w["asr"]] if w.get("asr") and " " not in w["asr"] else []) for w in words]
-    spans = find_sources([w.get("spoken", w["w"]) for w in words], alts)
+    spans = find_sources([w.get("spoken", w["w"]) for w in words], alts, surahs_named(data.get("title")))
     apply_quran(words, spans)
     _drop_words(data, spans)
     apply_hadith(data["words"], spans)

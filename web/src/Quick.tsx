@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, type Range, type TextStyle, type Word } from "./api";
 import { exportSpeed, type Ed } from "./Editor";
 import { effectiveCaption } from "./panels";
@@ -138,6 +138,14 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
   const [exact, setExact] = useState<string | null>(null);
   const [exactBusy, setExactBusy] = useState(false);
   const stopOut = useRef<number | null>(null);  // pause here (output time): the end of a caption played on its own
+  // the tallest caption box shown so far (px): the second line goes under it
+  const capBox = useRef<HTMLDivElement>(null);
+  const [capH, setCapH] = useState(0);
+  useLayoutEffect(() => {
+    const h = capBox.current?.offsetHeight ?? 0;
+    if (h > capH) setCapH(h);
+  });
+  useEffect(() => { setCapH(0); }, [width, s.style, s.style_data]);
 
   useEffect(() => { trackFor(ed.lecture.id, ed.framingVersion > 0).then(setTrack); }, [ed.lecture.id, ed.framingVersion]);
 
@@ -354,7 +362,7 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
         <video ref={v0} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline onLoadedMetadata={(e) => { place(e.currentTarget); e.currentTarget.playbackRate = rate; }} />
         <video ref={v1} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline style={{ opacity: 0 }} onLoadedMetadata={(e) => { place(e.currentTarget); e.currentTarget.playbackRate = rate; }} />
         {chunk && capStyle && (
-          <div className="q-cap" dir={rtl(chunk[0].w) ? "rtl" : "ltr"} style={textCss(capStyle, k)}>
+          <div ref={capBox} className="q-cap" dir={rtl(chunk[0].w) ? "rtl" : "ltr"} style={textCss(capStyle, k)}>
             {chunk.map((w, i) => (
               <span key={i} style={capStyle.highlight && w.s <= srcT && (chunk[i + 1]?.s ?? Infinity) > srcT ? { color: capStyle.highlight } : undefined}>
                 {w.w}{i < chunk.length - 1 ? " " : ""}
@@ -366,8 +374,10 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
           // the second line (a translation), under the caption as in the render
           const ss = { ...capStyle, size: Math.max(30, Math.round(capStyle.size * 0.6)), pad_x: Math.max(10, Math.round(capStyle.pad_x * 0.8)),
             pad_y: Math.max(6, Math.round(capStyle.pad_y * 0.7)) };
-          const below = (capStyle.size * 1.5 + 2 * capStyle.pad_y) / 2 + (ss.size * 1.5 + 2 * ss.pad_y) / 2 + 8;
-          return <div className="q-cap" dir="auto" style={{ ...textCss(ss, k), top: `calc(${capStyle.y * 100}% + ${below * k}px)` }}>{sub.text}</div>;
+          // its top under the tallest caption box shown so far (as the render places it under the tallest one)
+          const capHalf = Math.max(capH / 2, ((capStyle.size * 1.5 + 2 * capStyle.pad_y) / 2) * k);
+          return <div className="q-cap" dir="auto" style={{ ...textCss(ss, k), transform: "translate(-50%, 0)",
+            top: `calc(${capStyle.y * 100}% + ${capHalf + 10 * k}px)` }}>{sub.text}</div>;
         })()}
         {qSpan && capStyle && (
           <div className="q-cap q-tag" dir={tagLang === "ar" ? "rtl" : "ltr"} style={{

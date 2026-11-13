@@ -444,6 +444,7 @@ export function Workspace({ ed }: { ed: Ed }) {
             captions={s?.captions ? ed.captions?.captions ?? [] : []} captionKey={capKey}
             onCaption={(c) => { setCapKey(c.key); seek(c.src[0]); }}
             onCaptionOpen={(c) => { setCapKey(c.key); setOpen("text"); playInPreview(c.src); }}
+            onRangeChange={(i, r) => ed.update({ ranges: (ed.short?.ranges ?? []).map((x, k) => (k === i ? r : x)) })}
             onCaptionTime={(c, r) => captionEdit(ed, (e) => { e.times[String(c.key)] = [Math.round(r[0] * 100) / 100, Math.round(r[1] * 100) / 100]; })} />
           <ClipStrip ed={ed} onPlay={playRange} />
         </section>
@@ -1017,6 +1018,16 @@ function Moments({ ed, onSelect, seek }: { ed: Ed; onSelect: (r: Range | null) =
   );
 }
 
+/** How long since `since` (seconds, as the server's jobs report it), ticking every second. */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span className="tc">{fmt(Math.max(0, now - since), 0)}</span>;
+}
+
 function TranscriptInfo({ ed }: { ed: Ed }) {
   const tr = ed.transcript!;
   const q = (tr.sources ?? []).filter((s) => s.type === "quran").length;
@@ -1040,13 +1051,25 @@ function TranscriptInfo({ ed }: { ed: Ed }) {
         </Confirm>
       )}
       {ed.transcribeJob && <span className="small">Transcribing… {Math.round(ed.transcribeJob.progress * 100)}%</span>}
-      {tr.proofread && !ed.proofreadJob && <span className="muted small">· Proofread by Gemini, {tr.proofread.changed} word{tr.proofread.changed === 1 ? "" : "s"} changed</span>}
-      {ed.gemini && !ed.transcribeJob && left > 0 && (
-        ed.proofreadJob ? <span className="small">Gemini is proofreading…</span> : (
-          <button type="button" className="btn small" title="Send the audio and the transcript to Gemini (Google), which checks only the underlined words. On Google's free tier, what you send may be used to improve Google's products."
-            onClick={() => ed.proofread()}>{tr.proofread ? `Proofread the ${left} doubtful word${left === 1 ? "" : "s"} left` : "Proofread doubtful words with Gemini"}</button>
-        ))}
-      {ed.proofreadFailed && !ed.proofreadJob && <span className="small err-text" title={ed.proofreadFailed.message}>Gemini: {ed.proofreadFailed.message.slice(0, 80)}</span>}
+      {!!tr.holes?.length && !ed.transcribeJob && (ed.fillJob
+        ? <span className="small">Transcribing the skipped speech… {Math.round(ed.fillJob.progress * 100)}%</span>
+        : <button type="button" className="btn small" title={`Whisper wrote nothing for ${tr.holes.length} stretch${tr.holes.length === 1 ? "" : "es"} where someone is talking (from ${tr.holes.slice(0, 3).map(([a]) => fmt(a, 0)).join(", ")}${tr.holes.length > 3 ? "…" : ""}). Transcribe just those; your corrections and translation stay.`}
+            onClick={() => ed.fillHoles()}>
+            Transcribe {Math.round(tr.holes.reduce((n, [a, b]) => n + b - a, 0))} s of skipped speech
+          </button>)}
+      {ed.fillFailed && !ed.fillJob && <span className="small err-text" title={ed.fillFailed.message}>Couldn't transcribe the skipped speech: {ed.fillFailed.message.slice(0, 80)}</span>}
+      {tr.proofread && !ed.proofreadJob && <span className="muted small">· Proofread by Gemini, {tr.proofread.changed} word{tr.proofread.changed === 1 ? "" : "s"} changed
+        {tr.proofread.skipped ? `; ${tr.proofread.skipped} part${tr.proofread.skipped === 1 ? "" : "s"} Gemini didn't answer in time` : ""}</span>}
+      {ed.proofreadJob ? (
+        <span className="small" role="status">
+          Gemini is proofreading{ed.proofreadJob.message ? `: ${ed.proofreadJob.message}` : "…"}
+          {ed.proofreadJob.started ? <> · <Elapsed since={ed.proofreadJob.started} /></> : " · waiting for another job to finish"}
+        </span>
+      ) : ed.gemini && !ed.transcribeJob && left > 0 && (
+        <button type="button" className="btn small" title="Send the audio and the transcript to Gemini (Google), which checks only the underlined words, five minutes of audio at a time. On Google's free tier, what you send may be used to improve Google's products."
+          onClick={() => ed.proofread()}>{ed.proofreadFailed ? "Try proofreading again" : tr.proofread ? `Proofread the ${left} doubtful word${left === 1 ? "" : "s"} left` : "Proofread doubtful words with Gemini"}</button>
+      )}
+      {ed.proofreadFailed && !ed.proofreadJob && <span className="small err-text" role="alert">Proofreading stopped: {ed.proofreadFailed.message}</span>}
       <span className="tr-translate">
         {ed.translateJob ? (
           <span className="small">Translating… {Math.round(ed.translateJob.progress * 100)}%</span>

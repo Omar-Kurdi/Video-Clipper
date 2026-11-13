@@ -154,6 +154,36 @@ apply_proofread(d, [{"i": 2, "word": "ـهُ", "reason": "audio", "model": "m"}]
 check("a suffix answer («ـهُ») joins the word before, ة -> ت", [w["w"] for w in d["words"]] == ["اي", "وسوستهُ", "وليربط"],
       [w["w"] for w in d["words"]])
 
+# one heard word for two mushaf words (أَنِ ٱشْكُرْ heard as أنشكر), and a small alif spelt out (لقمان)
+r = refs("ولقد آتينا لقمان الحكمة أنشكر لله بسم الله الرحمن الرحيم الحمد لله رب العالمين")
+check("31:12 found with أنشكر for أَنِ ٱشْكُرْ", r[:1] == [("لقمان 31:12", 0, 6)], r)
+
+# a quotation never runs from the end of one surah into the next one's basmala
+r = refs("والامر يومئذ لله بسم الله الرحمن الرحيم ويل للمطففين")
+check("no quotation across a surah boundary", not any(ref.startswith("الانفطار") and w1 > 3 for ref, _, w1 in r), r)
+
+# الٓمٓ misheard (تلف لا) before words that read the same in Yunus (الٓر) and Luqman (الٓمٓ)
+LETTERS = "بسم الله الرحمن الرحيم تلف لا تلك آيات الكتاب الحكيم"
+d = annotate({**transcript(LETTERS), "title": "تفسير سورة لقمان"})
+q = [s for s in d["sources"] if s["type"] == "quran"]
+check("the title's surah decides between places", q and q[0]["ref"] == "لقمان 31:1–2", q)
+check("a misheard word in a quotation shows the mushaf's text", d["words"][4]["w"] == "الٓمٓ", [w["w"] for w in d["words"]])
+d = annotate(transcript(LETTERS))
+marked = [w["w"] for w in d["words"] if w.get("quran")]
+check("without the title, words that differ between places aren't shown as Quran",
+      "تلف" not in marked and "لا" not in marked and "تِلْكَ" in marked, marked)
+
+# two words that fit many places are not a quotation, even after a cue
+check("«رضي الله» is not Quran", refs("قال تعالى رضي الله عنه وارضاه") == [], refs("قال تعالى رضي الله عنه وارضاه"))
+
+# a lesson's opening (basmala, «الحمد لله رب العالمين», then blessings on the Prophet) is not al-Fatiha
+check("an opening formula isn't marked as Quran",
+      refs("بسم الله الرحمن الرحيم الحمد لله رب العالمين والصلاة والسلام على اشرف الانبياء") == [],
+      refs("بسم الله الرحمن الرحيم الحمد لله رب العالمين والصلاة والسلام على اشرف الانبياء"))
+check("al-Fatiha recited is still Quran", refs("بسم الله الرحمن الرحيم الحمد لله رب العالمين الرحمن الرحيم مالك يوم الدين")[:1]
+      and refs("بسم الله الرحمن الرحيم الحمد لله رب العالمين الرحمن الرحيم مالك يوم الدين")[0][0].startswith("الفاتحة"),
+      refs("بسم الله الرحمن الرحيم الحمد لله رب العالمين الرحمن الرحيم مالك يوم الدين"))
+
 # ---------- re-checking is stable ----------
 
 d = annotate(transcript("قال ربنا سبحانه والرجز فاهجر ولما وقع عليهم الرجز قالوا يا موسى ادع لنا ربك"))

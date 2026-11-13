@@ -48,6 +48,9 @@ export interface Ed {
   proofread: () => Promise<void>;
   proofreadJob: Job | null;
   proofreadFailed: Job | null;
+  fillHoles: () => Promise<void>;
+  fillJob: Job | null;
+  fillFailed: Job | null;
   translateJob: Job | null;
   renderedVersion: number;
   cameras: Cameras | null;
@@ -189,6 +192,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
           if (j.kind === "transcribe") { loadTranscript(); api.lecture(lectureId).then(setLecture); }
           if (j.kind === "translate") loadTranslation();
           if (j.kind === "proofread") loadTranscript();
+          if (j.kind === "fill") { loadTranscript(); loadTranslation(); }
           if (j.kind === "cameras") { loadCameras(); setFramingVersion((v) => v + 1); }
           if (j.kind === "publish") {
             api.shorts(lectureId).then((list) => setShorts((cur) => cur.map((c) => {
@@ -344,6 +348,9 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       proofread: async () => { await api.proofread(lectureId).catch((e) => setError(e.message)); pollJobs(); },
       proofreadJob: jobs.find((j) => j.kind === "proofread" && (j.status === "queued" || j.status === "running")) ?? null,
       proofreadFailed: jobs.find((j) => j.kind === "proofread")?.status === "error" ? jobs.find((j) => j.kind === "proofread")! : null,
+      fillHoles: async () => { await api.fillHoles(lectureId).catch((e) => setError(e.message)); pollJobs(); },
+      fillJob: jobs.find((j) => j.kind === "fill" && (j.status === "queued" || j.status === "running")) ?? null,
+      fillFailed: jobs.find((j) => j.kind === "fill")?.status === "error" ? jobs.find((j) => j.kind === "fill")! : null,
       editTranslation: async (k, text) => {
         const t = await api.editTranslation(lectureId, translationLang, k, text).catch((e) => { setError(e.message); return null; });
         if (t) setTranslation(t);

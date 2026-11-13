@@ -299,7 +299,67 @@ def align(asr: list[dict], text: str, edges: bool = False) -> list[dict]:
             out.append({"w": new[j], "s": round(t, 3), "e": round(t + dur * 0.95, 3),
                         "asr": " ".join(w["w"] for w in asr[i0:i1]) if i0 < i1 else "", "src": src})
             t += dur
-    return out
+    return settle_untimed(out)[0]
+
+
+UNTIMED = 0.02  # seconds: a word shorter than this got no time of its own
+
+
+def _untimed(w: dict) -> bool:
+    """A word the tashkeel reader added with no Whisper word to time it by."""
+    return w["e"] - w["s"] < UNTIMED and not w.get("asr")
+
+
+def settle_untimed(words: list[dict], before_ctx: list[dict] = (), after_ctx: list[dict] = (),
+                   limit: float | None = None) -> tuple[list[dict], int]:
+    """Words added between two Whisper words that touch get no time. Those that
+    only repeat the words just before or after them are dropped (the reader's
+    chunk overlapped them); the others share time with their two neighbours,
+    by length, so a caption can show them. before_ctx/after_ctx: the words of
+    the sentences around these (repeats are looked for there too); limit: where
+    the next sentence starts (nothing is timed past it). Returns (words, how
+    many dropped)."""
+    from .sources import norm
+
+    out = [dict(w) for w in words]
+    dropped, i = 0, 0
+    while i < len(out):
+        if not _untimed(out[i]):
+            i += 1
+            continue
+        j = i
+        while j < len(out) and _untimed(out[j]):
+            j += 1
+        # compared without a leading و / ف («فهذا اللفظ» repeats «هذا اللفظ»)
+        bare = lambda w: (lambda n: n[1:] if len(n) > 3 and n[0] in "وف" else n)(norm(w["w"]))  # noqa: E731
+        run = [bare(w) for w in out[i:j]]
+        before = [bare(w) for w in list(before_ctx) + out[:i]]
+        after = [bare(w) for w in out[j:] + list(after_ctx)]
+        # the run's start or end said again from the words around it: the words just before it, or just
+        # after it («بغير علم | بغير علم», and «X Y» between «… Y» and «X …» when the reader's chunk overlapped)
+        head = max((k for k in range(1, len(run) + 1) if run[:k] in (before[-k:], after[:k])), default=0)
+        rest = run[head:]
+        tail = max((k for k in range(1, len(rest) + 1) if rest[len(rest) - k:] in (after[:k], before[-k:])), default=0)
+        keep = out[i + head:j - tail]
+        dropped += head + tail
+        out[i:j] = keep
+        j = i + len(keep)
+        if keep:
+            left = i - 1 if i > 0 else None
+            right = j if j < len(out) else None
+            group = ([out[left]] if left is not None else []) + keep + ([out[right]] if right is not None else [])
+            s0 = group[0]["s"]
+            s1 = group[-1]["e"] if right is not None else max(group[-1]["e"], s0 + 0.3 * len(group))
+            if limit is not None:
+                s1 = max(s0 + 0.05 * len(group), min(s1, limit))
+            total = sum(len(norm(w["w"])) + 1 for w in group) or 1
+            t = s0
+            for w in group:
+                dur = (s1 - s0) * (len(norm(w["w"])) + 1) / total
+                w["s"], w["e"] = round(t, 3), round(t + dur, 3)
+                t += dur
+        i = j
+    return out, dropped
 
 
 def _formulas(asr: list[dict], out: list[dict]) -> list[dict]:

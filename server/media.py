@@ -416,6 +416,13 @@ def transcript(lid: str) -> dict | None:
         data["segments"] = segs
     from shorts.sources import SOURCES_VERSION
 
+    if data.get("engine") == "tashkeel" and not data.get("untimed_settled"):
+        # made before words the tashkeel reader added got a time (or were dropped as repeats): once
+        from shorts.transcribe import remap_translations, settle_untimed_words
+
+        data, where, _ = settle_untimed_words(data)
+        remap_translations(src, data, where)
+        data["sources_version"] = None  # word positions moved: find Quran/hadith again
     if data.get("sources_version") != SOURCES_VERSION:  # find Quran/hadith again with the latest matching
         from shorts.sources import annotate
 
@@ -434,13 +441,13 @@ def proofread(lid: str, report=None) -> dict:
     if data is None:
         raise KeyError("transcript")
     src = store.source_path(lid)
-    sug = suggest(src, data, store.get_lecture(lid).get("title"), on_progress=report)
-    changed = apply(data, sug)
+    sug, skipped = suggest(src, data, store.get_lecture(lid).get("title"), on_progress=report)
+    changed = apply(data, sug, skipped)
     from shorts.sources import annotate
 
     data = annotate(data)  # a repaired word can complete a verse or a hadith
     words_path(src).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    return {"suggestions": len(sug), "changed": changed}
+    return {"suggestions": len(sug), "changed": changed, "skipped": skipped}
 
 
 # ---------- live preview of one frame as a short ----------

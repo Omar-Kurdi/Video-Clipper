@@ -303,6 +303,9 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
     return np.asarray(img)
 
 
+SUB_GAP = 10  # pixels between the caption's box and the second line's
+
+
 def sub_style(ts: TextStyle) -> TextStyle:
     """The second caption line (a translation under the original): smaller,
     longer lines, no word highlight."""
@@ -355,11 +358,15 @@ class Overlay:
         return self._line("cap", self.chunks, self.starts, self.ends, self.style.captions, t)
 
     def _sub_offset(self) -> float:
-        """Pixels from the caption's centre down to the second line's centre."""
+        """Pixels from the caption's centre down to the second line's centre:
+        under the tallest caption box this short has (harakat above and below
+        make a box taller than a plain word's), so the two never overlap, and
+        the second line doesn't move from one caption to the next."""
         if "sub_off" not in self._cache:
-            cap_h = render_text(("كلمة",), self.style.captions).shape[0]
-            sub_h = render_text(("Word",), self.sub_style).shape[0]
-            self._cache["sub_off"] = cap_h / 2 + sub_h / 2 + 8
+            texts = [tuple(w[0] for w in c) for c in self.chunks] or [("كلمة",)]
+            cap_h = max(render_text(t, self.style.captions).shape[0] for t in texts)
+            sub_h = max(render_text(tuple(w[0] for w in c), self.sub_style).shape[0] for c in self.sub[:20] or [[("Word",)]])
+            self._cache["sub_off"] = cap_h / 2 + sub_h / 2 + SUB_GAP
         return self._cache["sub_off"]
 
     @staticmethod

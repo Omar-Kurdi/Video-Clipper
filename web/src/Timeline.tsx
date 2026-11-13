@@ -20,6 +20,8 @@ interface Props {
   onCaption?: (c: Caption) => void;
   onCaptionOpen?: (c: Caption) => void;
   onCaptionTime?: (c: Caption, r: Range) => void;
+  /** a clip of the short made longer or shorter by dragging its edge (once, when let go) */
+  onRangeChange?: (i: number, r: Range) => void;
 }
 
 // the editor's inks (see styles.css): red is what's in the short, hatching is a selection not added yet
@@ -83,6 +85,9 @@ export function Timeline(p: Props) {
   const [v0, v1] = p.view;
   const xOf = (t: number) => ((t - v0) / (v1 - v0)) * W;
   const tOf = (x: number) => v0 + (x / W) * (v1 - v0);
+  // a clip's edge being dragged: drawn from here until it's let go and saved
+  const [live, setLive] = useState<Range[] | null>(null);
+  const ranges = live ?? p.ranges;
 
   // ----- draw main -----
   useEffect(() => {
@@ -112,7 +117,7 @@ export function Timeline(p: Props) {
     }
     // short's ranges: a faint wash and a red track along the top, numbered in order
     ctx.font = "500 10px 'Spline Sans Mono', monospace";
-    p.ranges.forEach(([a, b], i) => {
+    ranges.forEach(([a, b], i) => {
       if (b < v0 || a > v1) return;
       ctx.fillStyle = C.range;
       ctx.fillRect(xOf(a), top, xOf(b) - xOf(a), bot - top);
@@ -132,7 +137,7 @@ export function Timeline(p: Props) {
         let m = 0;
         for (let i = Math.max(0, i0); i < Math.min(peaks.length, i1); i++) m = Math.max(m, peaks[i]);
         const t = tOf(x + 1);
-        const inRange = p.ranges.some(([a, b]) => t >= a && t <= b);
+        const inRange = ranges.some(([a, b]) => t >= a && t <= b);
         ctx.fillStyle = inRange ? C.waveSel : C.wave;
         const h = Math.max(1, (m / 100) * amp);
         ctx.fillRect(x, mid - h, 1.4, h * 2);
@@ -178,7 +183,7 @@ export function Timeline(p: Props) {
       void rate;
     }
     ctx.fillStyle = C.rangeEdge;
-    for (const [a, b] of p.ranges) ctx.fillRect(X(a), OH - 4, Math.max(2, X(b) - X(a)), 4);
+    for (const [a, b] of ranges) ctx.fillRect(X(a), OH - 4, Math.max(2, X(b) - X(a)), 4);
     ctx.strokeStyle = C.overBox;
     ctx.lineWidth = 1;
     ctx.strokeRect(X(v0) + 0.5, 0.5, Math.max(4, X(v1) - X(v0)) - 1, OH - 1);
@@ -193,7 +198,26 @@ export function Timeline(p: Props) {
   const RULER = 18;
   const inRuler = (e: { clientY: number; currentTarget: Element }) =>
     e.clientY - e.currentTarget.getBoundingClientRect().top < RULER;
-  const drag = useRef<{ kind: "new" | "start" | "end" | "scrub"; anchor: number; x0: number; moved: boolean } | null>(null);
+  const drag = useRef<{ kind: "new" | "start" | "end" | "scrub" | "clipStart" | "clipEnd"; anchor: number; x0: number;
+    moved: boolean; clip?: number } | null>(null);
+  const EDGE = 7;  // px from an edge that grabs it
+  /** The clip edge under x, if any: [clip, which end]. */
+  const clipEdge = (x: number): [number, "clipStart" | "clipEnd"] | null => {
+    if (!p.onRangeChange) return null;
+    let best: [number, "clipStart" | "clipEnd"] | null = null, dist = EDGE;
+    p.ranges.forEach(([a, b], i) => {
+      if (Math.abs(x - xOf(a)) < dist) { dist = Math.abs(x - xOf(a)); best = [i, "clipStart"]; }
+      if (Math.abs(x - xOf(b)) < dist) { dist = Math.abs(x - xOf(b)); best = [i, "clipEnd"]; }
+    });
+    return best;
+  };
+  /** Clip i with one end moved to t: at least half a second long, never across its neighbours. */
+  const moved = (i: number, end: "clipStart" | "clipEnd", t: number): Range => {
+    const [a, b] = p.ranges[i];
+    const lo = i > 0 ? p.ranges[i - 1][1] : 0, hi = i < p.ranges.length - 1 ? p.ranges[i + 1][0] : p.duration;
+    const r = (x: number) => Math.round(x * 100) / 100;
+    return end === "clipStart" ? [r(clamp(t, lo, b - 0.5)), b] : [a, r(clamp(t, a + 0.5, hi))];
+  };
 
   const onDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const x = localX(e);
@@ -206,8 +230,14 @@ export function Timeline(p: Props) {
     }
     let kind: "new" | "start" | "end" = "new";
     if (p.selection) {
-      if (Math.abs(x - xOf(p.selection[0])) < 7) kind = "start";
-      else if (Math.abs(x - xOf(p.selection[1])) < 7) kind = "end";
+      if (Math.abs(x - xOf(p.selection[0])) < EDGE) kind = "start";
+      else if (Math.abs(x - xOf(p.selection[1])) < EDGE) kind = "end";
+    }
+    const edge = kind === "new" ? clipEdge(x) : null;
+    if (edge) {
+      drag.current = { kind: edge[1], anchor: t, x0: x, moved: false, clip: edge[0] };
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
+      return;
     }
     drag.current = { kind, anchor: kind === "start" ? p.selection![1] : kind === "end" ? p.selection![0] : t, x0: x, moved: false };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
@@ -216,11 +246,21 @@ export function Timeline(p: Props) {
     const d = drag.current;
     const x = localX(e);
     if (!d) {
-      const near = p.selection && (Math.abs(x - xOf(p.selection[0])) < 7 || Math.abs(x - xOf(p.selection[1])) < 7);
-      e.currentTarget.style.cursor = inRuler(e) ? "col-resize" : near ? "ew-resize" : "crosshair";
+      const near = p.selection && (Math.abs(x - xOf(p.selection[0])) < EDGE || Math.abs(x - xOf(p.selection[1])) < EDGE);
+      const edge = !near && clipEdge(x);
+      e.currentTarget.style.cursor = inRuler(e) ? "col-resize" : near || edge ? "ew-resize" : "crosshair";
+      e.currentTarget.title = edge ? `Drag to make clip ${edge[0] + 1} ${edge[1] === "clipStart" ? "start" : "end"} earlier or later` : "";
       return;
     }
     if (d.kind === "scrub") { p.onSeek(clamp(tOf(x), 0, p.duration)); return; }
+    if (d.kind === "clipStart" || d.kind === "clipEnd") {
+      if (Math.abs(x - d.x0) > 2) d.moved = true;
+      if (!d.moved) return;
+      const r = moved(d.clip!, d.kind, tOf(x));
+      setLive(p.ranges.map((x, k) => (k === d.clip ? r : x)));
+      p.onSeek(d.kind === "clipStart" ? r[0] : r[1]);  // the video shows where the edge is
+      return;
+    }
     if (Math.abs(x - d.x0) > 3) d.moved = true;
     if (!d.moved) return;
     const t = clamp(tOf(x), 0, p.duration);
@@ -231,6 +271,12 @@ export function Timeline(p: Props) {
     drag.current = null;
     if (!d || d.kind === "scrub") return;
     const x = localX(e);
+    if (d.kind === "clipStart" || d.kind === "clipEnd") {
+      setLive(null);
+      if (d.moved) p.onRangeChange?.(d.clip!, moved(d.clip!, d.kind, tOf(x)));
+      else p.onSeek(clamp(tOf(x), 0, p.duration));
+      return;
+    }
     if (Math.abs(x - d.x0) > 3) d.moved = true;
     const t = clamp(tOf(x), 0, p.duration);
     if (d.moved) p.onSelect([Math.min(d.anchor, t), Math.max(d.anchor, t)]);
@@ -303,7 +349,7 @@ export function Timeline(p: Props) {
     <div ref={wrap} className="timeline">
       <canvas ref={over} className="overview" aria-label="Whole video overview"
         onPointerDown={overDown} onPointerMove={overMove} onPointerUp={overUp} />
-      <canvas ref={main} className="wave" aria-label="Timeline: drag to select, click to seek, drag along the times at the top to scrub, Ctrl+scroll to zoom"
+      <canvas ref={main} className="wave" aria-label="Timeline: drag to select, drag a clip's edge to make it longer or shorter, click to seek, drag along the times at the top to scrub, Ctrl+scroll to zoom"
         onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} />
       {!!p.captions?.length && (
         <div className="cap-track" aria-label="Captions: click to pick, double-click to edit, drag an edge to change when it shows">

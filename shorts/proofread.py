@@ -23,7 +23,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://generativelanguage.googleapis.com/v1beta"
-WINDOW = 30 * 60  # seconds of audio per request (inline audio must stay under ~20 MB)
+WINDOW = 5 * 60  # seconds of audio per request: short enough to answer in well under a minute
+PROOF_TIMEOUT = 180  # seconds one request may take before it's tried again or skipped
+PROOF_WAITS = (5, 15)  # a busy model is tried again after these, then the next model
 
 PROMPT = """You proofread an automatic transcript of an Arabic Islamic lecture{title}.
 You get the lecture audio and the transcript as numbered sentences with their start time in seconds.
@@ -77,8 +79,9 @@ RETRY_WAITS = (5, 15, 30)  # seconds between attempts when the model is busy
 
 
 def _call(path: str, key: str, body: dict | None = None, timeout: float = 600,
-          waits: tuple[int, ...] = RETRY_WAITS) -> dict:
-    """One API call; a busy model (500/503) is tried again after each of `waits`."""
+          waits: tuple[int, ...] = RETRY_WAITS, on_wait=None) -> dict:
+    """One API call; a busy model (500/503) is tried again after each of
+    `waits` (on_wait(seconds) is told before each wait)."""
     import time
 
     for wait in waits + (None,):
@@ -87,6 +90,8 @@ def _call(path: str, key: str, body: dict | None = None, timeout: float = 600,
         except Busy:
             if wait is None:
                 raise
+            if on_wait:
+                on_wait(wait)
             time.sleep(wait)
 
 
@@ -167,19 +172,25 @@ def _marked(data: dict, lo: float, hi: float) -> tuple[str, dict[int, int]]:
     return "\n".join(lines), ids
 
 
-def suggest(video: Path, data: dict, title: str | None = None, on_progress=None) -> list[dict]:
-    """Gemini's readings for the doubtful words: [{"i": word index, "word", "reason"}]."""
+def suggest(video: Path, data: dict, title: str | None = None, on_progress=None) -> tuple[list[dict], int]:
+    """Gemini's readings for the doubtful words: ([{"i": word index, "word",
+    "reason"}], number of parts that couldn't be checked). The lecture goes in
+    parts of WINDOW seconds; a part Gemini doesn't answer in time (busy, slow)
+    is skipped so the rest still gets checked. on_progress(fraction, message)."""
     key = api_key()
     if not key:
         raise ProofreadError("set GEMINI_API_KEY in .env to use Gemini proofreading")
+    say = on_progress or (lambda f, m: None)
+    say(0.0, "choosing a Gemini model")
     models = choose_models(key)
     end = max((w["e"] for w in data["words"]), default=0.0)
     windows = [(t, min(end, t + WINDOW)) for t in range(0, int(end) + 1, WINDOW)] or [(0, end)]
-    out = []
-    for n, (lo, hi) in enumerate(windows):
-        text, ids = _marked(data, lo, hi)
-        if not ids:
-            continue
+    parts = [(lo, hi, *_marked(data, lo, hi)) for lo, hi in windows]
+    parts = [p for p in parts if p[3]]  # only parts with doubtful words
+    out, skipped, last_error = [], 0, None
+    for n, (lo, hi, text, ids) in enumerate(parts):
+        where = f"part {n + 1} of {len(parts)}"
+        say(n / len(parts), where)
         prompt = PROMPT.format(title=f' titled «{title}»' if title else "", transcript=text)
         body = {
             "contents": [{"role": "user", "parts": [
@@ -191,26 +202,38 @@ def suggest(video: Path, data: dict, title: str | None = None, on_progress=None)
                                      "joins": {"type": "STRING", "enum": ["none", "previous", "next"]},
                                      "reason": {"type": "STRING"}}, "required": ["id", "word", "joins"]}}},
         }
-        for model in models:  # a busy or exhausted model hands over to the next one
+        res = None
+        for model in models:  # a busy, exhausted or slow model hands over to the next one
             try:
-                res = _call(f"models/{model}:generateContent", key, body)
+                res = _call(f"models/{model}:generateContent", key, body, timeout=PROOF_TIMEOUT, waits=PROOF_WAITS,
+                            on_wait=lambda w: say(n / len(parts), f"{where}: Gemini is busy, trying again in {w} s"))
                 break
-            except (Busy, OutOfQuota):
-                if model == models[-1]:
-                    raise
+            except (Busy, OutOfQuota) as e:
+                last_error = e
+            except ProofreadError as e:
+                if "timed out" not in str(e):
+                    raise  # a rejected key or a bad request: no point going on
+                last_error = e
+            if model != models[-1]:
+                say(n / len(parts), f"{where}: {last_error}; trying {models[models.index(model) + 1]}")
+        if res is None:
+            skipped += 1
+            continue
         models = models[models.index(model):]  # stay with the one that answered
         try:
             items = json.loads(res["candidates"][0]["content"]["parts"][0]["text"])
-        except (KeyError, IndexError, json.JSONDecodeError) as e:
-            raise ProofreadError(f"unexpected answer from Gemini: {str(res)[:300]}") from e
+        except (KeyError, IndexError, json.JSONDecodeError):
+            skipped += 1
+            continue
         for it in items:
             i = ids.get(int(it.get("id", -1)))
             if i is not None and str(it.get("word", "")).strip():
                 out.append({"i": i, "word": it["word"].strip(), "reason": str(it.get("reason", "")).strip(),
                             "joins": it.get("joins", "none"), "model": model})
-        if on_progress:
-            on_progress((n + 1) / len(windows))
-    return out
+    if parts and skipped == len(parts):
+        raise ProofreadError(f"Gemini didn't answer for any part: {last_error}")
+    say(1.0, "applying Gemini's readings")
+    return out, skipped
 
 
 def _similar(a: str, b: str) -> float:
@@ -219,7 +242,7 @@ def _similar(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
 
 
-def apply(data: dict, suggestions: list[dict]) -> int:
+def apply(data: dict, suggestions: list[dict], skipped: int = 0) -> int:
     """Apply Gemini's readings to the doubtful words. A changed word gets flag
     "gemini" (its old reading in alts, the reason in "why"); a confirmed one
     loses its doubt. When Gemini's word clearly covers the word before or after
@@ -264,7 +287,7 @@ def apply(data: dict, suggestions: list[dict]) -> int:
             w["w"], w["flag"], w["why"] = new, "gemini", s.get("reason") or "Gemini"
         changed += 1
     _drop_words(data, [])
-    data["proofread"] = {"model": suggestions[0]["model"] if suggestions else None, "changed": changed}
+    data["proofread"] = {"model": suggestions[0]["model"] if suggestions else None, "changed": changed, "skipped": skipped}
     return changed
 
 

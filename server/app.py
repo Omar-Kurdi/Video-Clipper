@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from shorts.captions import PRESETS
 from shorts.pipeline import ShortOptions, estimate, make_short
-from shorts.transcribe import load_words, release_whisper, transcribe, words_path
+from shorts.transcribe import fill_holes, holes, load_words, release_whisper, transcribe, words_path
 from shorts.translate import LANGS, translate
 from shorts.translate import edit as edit_translation
 from shorts.translate import load as load_translation
@@ -309,7 +309,27 @@ def lecture_transcript(lid: str):
     data = media.transcript(lid)
     if data is None:
         raise HTTPException(404, "no transcript")
+    # stretches of detected speech the transcript has no words for (Whisper skipped them)
+    speech = store.lecture_dir(lid) / "speech.json"
+    if speech.exists() and data["words"]:
+        data["holes"] = holes(data["words"], json.loads(speech.read_text()), store.get_lecture(lid).get("duration") or 1e9,
+                              data.get("holes_tried"))
     return data
+
+
+@app.post("/api/lectures/{lid}/transcript/fill")
+def lecture_fill_holes(lid: str):
+    """Transcribe the speech the transcript skipped; the rest stays as it is."""
+    running = jobs.active(lecture_id=lid, kind="fill")
+    if running:
+        return running
+    if media.transcript(lid) is None:
+        raise HTTPException(400, "transcribe the video first")
+
+    def run(report):
+        report(stage="transcribing skipped speech")
+        return {"added": fill_holes(store.source_path(lid), on_progress=lambda f: report(progress=f))}
+    return jobs.submit("fill", run, lecture_id=lid)
 
 
 class SegmentEditIn(BaseModel):
@@ -434,7 +454,7 @@ def lecture_proofread(lid: str):
 
     def run(report):
         report(stage="proofreading")
-        return media.proofread(lid, lambda f: report(progress=f))
+        return media.proofread(lid, lambda f, m="": report(progress=f, message=m))
     return jobs.submit("proofread", run, lane="io", lecture_id=lid)
 
 

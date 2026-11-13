@@ -2,7 +2,7 @@ export type Range = [number, number];
 
 export interface Job {
   id: string;
-  kind: "download" | "analyze" | "transcribe" | "translate" | "proofread" | "render" | "cameras" | "publish";
+  kind: "download" | "analyze" | "transcribe" | "translate" | "proofread" | "fill" | "render" | "cameras" | "publish";
   status: "queued" | "running" | "done" | "error";
   progress: number;
   stage: string;
@@ -11,6 +11,7 @@ export interface Job {
   short_id?: string;
   name?: string;
   created: number;
+  started?: number;  // seconds (server clock), once it runs
 }
 
 export interface Lecture {
@@ -143,7 +144,8 @@ export interface Transcript {
   segments: { s: number; e: number; w0: number; w1: number; edited?: boolean }[];
   sources?: Source[];
   engine?: "whisper" | "tashkeel";
-  proofread?: { model: string | null; changed: number };  // set once Gemini has proofread it
+  proofread?: { model: string | null; changed: number; skipped?: number };  // set once Gemini has proofread it (skipped: parts it didn't answer)
+  holes?: [number, number][];  // detected speech with no words (Whisper skipped it); seconds
 }
 
 export interface Translation {
@@ -211,6 +213,7 @@ export const api = {
     req<Transcript>(`/api/lectures/${id}/transcript/segments/${k}`, json({ text }, "PUT")),
   features: () => req<{ gemini: boolean }>("/api/features"),
   proofread: (id: string) => req<Job>(`/api/lectures/${id}/proofread`, { method: "POST" }),
+  fillHoles: (id: string) => req<Job>(`/api/lectures/${id}/transcript/fill`, { method: "POST" }),
   describeShort: (id: string, sid: string) => req<Short>(`/api/lectures/${id}/shorts/${sid}/describe`, { method: "POST" }),
   youtube: () => req<{ configured: boolean; connected: boolean; channel: string | null }>("/api/publish/youtube"),
   youtubeDisconnect: () => req<{ configured: boolean; connected: boolean; channel: string | null }>("/api/publish/youtube/disconnect", { method: "POST" }),
