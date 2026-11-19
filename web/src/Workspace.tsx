@@ -978,7 +978,7 @@ function Moments({ ed, onSelect, seek }: { ed: Ed; onSelect: (r: Range | null) =
   const [open, setOpen] = useState(true);
   const id = ed.lecture.id;
   useEffect(() => { setList(null); api.moments(id).then((m) => setList(m.moments)).catch(() => {}); }, [id]);
-  if (!ed.gemini) return null;
+  if (!ed.writer) return null;
   const suggest = async () => {
     setBusy(true); setErr(null);
     try { setList((await api.suggestMoments(id)).moments); setOpen(true); }

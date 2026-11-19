@@ -151,9 +151,9 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   The key can live in `.env` or `.env.local` (both git-ignored). On the free
   tier Google may use what you send to improve its products. On the Sa'd test
   lecture it took word errors from 6.6 % to 6.2 % (letters 4.1 % → 3.3 %).
-- **Suggested moments** (optional, online, needs the Gemini key): **Suggest
-  moments** above the transcript sends the transcript text (not the audio) to
-  Gemini, which picks complete thoughts of 20–90 s that stand on their own (a
+- **Suggested moments** (optional, needs the Gemini key or the local model):
+  **Suggest moments** above the transcript sends the transcript text (not the
+  audio) to Gemini (or, when it can't answer, the local model), which picks complete thoughts of 20 s to 3 min (the longest a YouTube Short can be) that stand on their own (a
   question with its answer, a story with its point) and says why. Click one to
   select it, then add it to a short. Moments already in the short get a red bar.
 - **Who to frame**: under Framing, *The main speaker* holds the person on
@@ -176,7 +176,8 @@ light CPU setting is used, and the render log says which. To run in the foregrou
 - **Safe area**: above the preview, show where TikTok, Reels or Shorts put
   their buttons and text, so faces and captions stay clear of them (approximate).
 - **Post text**: under Export, a title, description and hashtags for the short
-  (yours, or **Write with Gemini** from what the short says, in its language),
+  (yours, or **Write the post text** from what the short says, in its language:
+  by Gemini, or by the local model when Gemini can't answer),
   with **Copy all** for pasting into any app.
 
   <img src="docs/screenshots/export.png" alt="Export: post text written by Gemini, and posting to YouTube" width="300">
@@ -192,11 +193,48 @@ light CPU setting is used, and the render log says which. To run in the foregrou
   be locked to private. TikTok and Instagram need an app reviewed by them (and
   Instagram a public video URL), so they aren't built in yet.
 - **Translation** (optional): **Translate to English** (or to Arabic, for an
-  English lecture) translates every sentence on the GPU with
+  English lecture) translates every sentence on the GPU: with Qwen3.8-27B when
+  Ollama is running with it (see **Local model** below), else with
   Qwen3-4B-Instruct. Whole Quran verses use the Saheeh International
   translation word for word; hadith use the collection's English as a
   reference. Show it under each sentence, double-click to correct it (your
   corrections survive re-translating), and pick it as the caption language.
+- **Local model** (optional): a language model on this computer, through
+  [Ollama](https://ollama.com) 0.40 or newer. To see which one suits the
+  computer (by its NVIDIA GPU's memory, else the CPU) and whether it's there:
+
+  ```bash
+  .venv/bin/python -m shorts.local_llm
+  ```
+
+  | GPU memory | Model | Size |
+  |---|---|---|
+  | 27 GB or more | Qwen3.8-27B `Q6_K` | 24 GB |
+  | 24 GB | Qwen3.8-27B `Q5_K_M` | 21 GB |
+  | 20 GB | Qwen3.8-27B `Q4_K_M` | 17 GB |
+  | 15–16 GB | Qwen3.8-27B `Q3_K_M` (tested, RTX 5080) | 13 GB |
+  | 10–12 GB | Qwen3.5-9B `Q5_K_M` | 7 GB |
+  | 8 GB | Qwen3.5-9B `Q4_K_M` | 6 GB |
+  | 5–6 GB | Qwen3.5-4B `Q5_K_M` | 3.4 GB |
+  | none (8 GB memory or more) | Qwen3.5-4B `Q4_K_M`, on the CPU (slow) | 3 GB |
+
+  Pull the one it names (e.g. `ollama pull hf.co/bartowski/Qwen3.8-27B-GGUF:Q3_K_M`),
+  then run Ollama:
+
+  ```bash
+  OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 ollama serve
+  ```
+
+  With it running, translation uses it, and suggested moments and post text
+  use it when Gemini is busy, out of quota or has no key. On three proofread
+  lectures Qwen3.8-27B's English was far better than Qwen3-4B's and about as
+  good as Gemini's, and its moments largely matched Gemini's; it can't
+  proofread (it doesn't hear the audio), so that stays with Gemini. The
+  smaller models are the same family, untested here. Nothing is loaded until
+  a job needs it, and it's unloaded when the job ends, so it holds no GPU or
+  memory otherwise. The app uses the best pulled model that fits;
+  `LOCAL_MODEL=` in `.env.local` picks one yourself, `OLLAMA_URL=` another
+  address.
 - **Speed**: the preview can play at 1.25–2× on its own; **Export speed**
   speeds up the render with the voice pitch kept (ffmpeg `atempo`).
 - Under the video and the preview: a **volume control** (slider and mute, one
@@ -307,8 +345,9 @@ code: `python tests/test_credits.py` fails when a model or dataset referenced in
 | Harakat (tashkeel) | [NAMAA-Space/Cohere-Speech-Tashkeel-2B](https://huggingface.co/NAMAA-Space/Cohere-Speech-Tashkeel-2B), fine-tuned from [Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) | Apache-2.0 |
 | Second opinion on every word (doubtful-word marks) | [NVIDIA FastConformer Arabic (pcd)](https://huggingface.co/nvidia/stt_ar_fastconformer_hybrid_large_pcd_v1.0), ONNX export [OpenVoiceOS/stt_ar_fastconformer_hybrid_large_pcd_v1.0_onnx](https://huggingface.co/OpenVoiceOS/stt_ar_fastconformer_hybrid_large_pcd_v1.0_onnx), run with [onnx-asr](https://github.com/istupakov/onnx-asr) | CC-BY-4.0 |
 | Pause detection | [Silero VAD](https://github.com/snakers4/silero-vad) (bundled with faster-whisper) | MIT |
-| Proofreading doubtful words (optional, online) | Google [Gemini](https://ai.google.dev) API, newest Flash model your key can use (or `GEMINI_MODEL`) | Google's API terms |
-| Translation | [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) | Apache-2.0 |
+| Proofreading doubtful words, suggested moments, post text (optional, online) | Google [Gemini](https://ai.google.dev) API: the newest full Flash model your key can use, then Flash-Lite, then older Flash models (or `GEMINI_MODEL`) | Google's API terms |
+| Translation; moments and post text when Gemini can't answer (optional, local) | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) ([bartowski GGUF](https://huggingface.co/bartowski/Qwen3.8-27B-GGUF)); on smaller GPUs [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) ([GGUF](https://huggingface.co/bartowski/Qwen_Qwen3.5-9B-GGUF)) or [Qwen/Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B) ([GGUF](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF)); run with [Ollama](https://ollama.com) | Apache-2.0 |
+| Translation without the local model | [Qwen/Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) | Apache-2.0 |
 | Face detection | [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (`face_detection_yunet_2023mar.onnx`, OpenCV Zoo) | MIT |
 | Recognising the speaker | [SFace](https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface) (`face_recognition_sface_2021dec.onnx`, OpenCV Zoo) | Apache-2.0 |
 | Quran text (Uthmani) | [arbml/quran_uthmani](https://huggingface.co/datasets/arbml/quran_uthmani), which appears to be the [Tanzil](https://tanzil.net) Uthmani text: used verbatim, as Tanzil's terms require | Tanzil terms |

@@ -56,6 +56,14 @@ class Busy(ProofreadError):
     """The model is overloaded right now (another model may answer)."""
 
 
+class Retired(ProofreadError):
+    """The key lists the model but it no longer serves it (404)."""
+
+
+# models that answered "no longer available" in this process: not tried again
+_RETIRED: set[str] = set()
+
+
 class OutOfQuota(ProofreadError):
     """This model's free quota is used up for now (each model has its own)."""
 
@@ -115,6 +123,8 @@ def _call_once(path: str, key: str, body: dict | None, timeout: float) -> dict:
             raise OutOfQuota(f"Gemini quota reached for now: {msg}") from e
         if e.code in (400, 401, 403) and "API key" in detail:
             raise ProofreadError("Gemini rejected the API key (GEMINI_API_KEY in .env)") from e
+        if e.code == 404:
+            raise Retired(f"no longer available ({e.code})") from e
         raise ProofreadError(f"Gemini error {e.code}: {detail}") from e
     except urllib.error.URLError as e:
         raise ProofreadError(f"can't reach Gemini: {e.reason}") from e
@@ -123,8 +133,9 @@ def _call_once(path: str, key: str, body: dict | None, timeout: float) -> dict:
 
 
 def choose_models(key: str) -> list[str]:
-    """Models to try, in order: GEMINI_MODEL if set, then this key's Flash
-    models from newest to oldest (full Flash before Flash-Lite)."""
+    """Models to try, in order: GEMINI_MODEL if set, then this key's newest
+    full Flash model, its Flash-Lite models (newest first), then its other
+    full Flash models; leaving out those that answered "no longer available"."""
     forced = _setting("GEMINI_MODEL")
     names = []
     page = ""
@@ -140,11 +151,16 @@ def choose_models(key: str) -> list[str]:
         m = re.match(r"gemini-(\d+(?:\.\d+)?)-flash(-lite)?$", n)
         return (float(m.group(1)), not m.group(2)) if m else (-1, False)
 
-    flash = sorted((n for n in names if version(n)[0] >= 0), key=version, reverse=True)
-    order = ([forced.removeprefix("models/")] if forced else []) + flash
+    # one full Flash (the newest), then Flash-Lite (newest first), then the other full Flash models.
+    # On the free tier the full Flash models are often turned away when busy ("high demand"),
+    # while Flash-Lite answers; each model has its own daily allowance, so the others are a real fallback
+    flash = sorted((n for n in names if version(n)[0] >= 0 and n not in _RETIRED), key=version, reverse=True)
+    full = [n for n in flash if not n.endswith("-lite")]
+    lite = [n for n in flash if n.endswith("-lite")]
+    order = ([forced.removeprefix("models/")] if forced else []) + full[:1] + lite + full[1:]
     if not order:
         raise ProofreadError("no Gemini Flash model available for this key")
-    return list(dict.fromkeys(order))
+    return [m for m in dict.fromkeys(order) if m not in _RETIRED]
 
 
 def _audio(video: Path, start: float, length: float) -> bytes:
@@ -223,13 +239,18 @@ def suggest(video: Path, data: dict, title: str | None = None, on_progress=None)
                 except Busy as e:
                     code = re.search(r"\((\d{3})\)", str(e))
                     why = f"{model} is overloaded (Google answered {code.group(1) if code else 503})"
-                    wait = BUSY_WAITS[attempt] if attempt < len(BUSY_WAITS) else None
+                    # another model is left: try it now; the last one is asked again after a wait
+                    wait = BUSY_WAITS[attempt] if attempt < len(BUSY_WAITS) and m + 1 == len(models) else None
                     if wait is None or ends - time.monotonic() < wait + 10:
                         break
                     say(n / len(parts), f"{where}: {why}; asking it again in", time.time() + wait)
                     time.sleep(wait)
                 except OutOfQuota as e:
                     why = f"{model}: {e}"
+                    break
+                except Retired:
+                    _RETIRED.add(model)
+                    why = f"{model} is no longer available"
                     break
                 except ProofreadError as e:
                     if "timed out" not in str(e):
@@ -342,8 +363,14 @@ def ask_json(prompt: str, schema: dict, temperature: float = 0.4) -> tuple[objec
     start = time.monotonic()
     for model in models:
         try:
-            res = _call(f"models/{model}:generateContent", key, body, timeout=QUICK_TIMEOUT, waits=QUICK_WAITS)
+            # an overloaded model is asked again only when it's the last one left
+            res = _call(f"models/{model}:generateContent", key, body, timeout=QUICK_TIMEOUT,
+                        waits=QUICK_WAITS if model == models[-1] else ())
             break
+        except Retired:
+            _RETIRED.add(model)
+            if model == models[-1]:
+                raise
         except (Busy, OutOfQuota):
             if model == models[-1] or time.monotonic() - start > 90:
                 raise

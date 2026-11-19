@@ -440,8 +440,11 @@ def edit_translation_segment(lid: str, lang: str, k: int, body: TranslationEditI
 
 @app.get("/api/features")
 def features():
+    from shorts.local_llm import available
     from shorts.proofread import api_key
-    return {"gemini": bool(api_key())}
+    local = available()
+    # writer: suggested moments and post text, from Gemini or else the local model
+    return {"gemini": bool(api_key()), "local_model": local, "writer": bool(api_key()) or bool(local)}
 
 
 @app.post("/api/lectures/{lid}/proofread")

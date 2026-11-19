@@ -71,4 +71,8 @@ echo "==> Building the web app"
 (cd web && npm install --no-audit --no-fund --silent && npm run build --silent)
 
 echo
+echo "==> Optional local model (translation, and moments/post text when Gemini can't answer)"
+.venv/bin/python -m shorts.local_llm | sed 's/^/    /' || true
+
+echo
 echo "Installed. Start with ./start.sh, stop with ./stop.sh"

@@ -45,6 +45,7 @@ export interface Ed {
   translate: () => Promise<void>;
   editTranslation: (k: number, text: string) => Promise<void>;
   gemini: boolean;  // a Gemini key is set on the server
+  writer: boolean;  // suggested moments and post text can be written (Gemini, or else the local model)
   proofread: () => Promise<void>;
   proofreadJob: Job | null;
   proofreadFailed: Job | null;
@@ -99,7 +100,8 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [translation, setTranslation] = useState<Translation | null>(null);
   const [gemini, setGemini] = useState(false);
-  useEffect(() => { api.features().then((f) => setGemini(f.gemini)).catch(() => {}); }, []);
+  const [writer, setWriter] = useState(false);
+  useEffect(() => { api.features().then((f) => { setGemini(f.gemini); setWriter(f.writer); }).catch(() => {}); }, []);
   const [waveform, setWaveform] = useState<Ed["waveform"]>(null);
   const [speech, setSpeech] = useState<Range[]>([]);
   const [styles, setStyles] = useState<Styles | null>(null);
@@ -344,7 +346,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
         return last?.status === "error" ? last.message : null;
       })(),
       translationLang, translation,
-      gemini,
+      gemini, writer,
       proofread: async () => { await api.proofread(lectureId).catch((e) => setError(e.message)); pollJobs(); },
       proofreadJob: jobs.find((j) => j.kind === "proofread" && (j.status === "queued" || j.status === "running")) ?? null,
       proofreadFailed: jobs.find((j) => j.kind === "proofread")?.status === "error" ? jobs.find((j) => j.kind === "proofread")! : null,
@@ -408,7 +410,7 @@ export function Editor({ lectureId, mode, shortId }: { lectureId: string; mode: 
       canRedo: !!current && stepsOf(current.id).redo.length > 0,
     };
   }, [step, historyVersion, lecture, visible, shorts, current, update, transcript, waveform, speech, styles, refreshStyles, estimate, jobs,
-    renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang, gemini, captions]);
+    renderedVersion, time, lectureId, mode, pollJobs, cameras, framingVersion, translation, translationLang, gemini, writer, captions]);
 
   if (error && !lecture) return <div className="fatal"><p>{error}</p><a href="#/">Back to library</a></div>;
   if (!ed) return <div className="fatal"><p>Loading…</p></div>;

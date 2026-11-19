@@ -376,17 +376,17 @@ function PostText({ ed }: { ed: Ed }) {
     finally { setBusy(false); }
   };
   const text = [post.title, post.description, post.hashtags.map((h) => `#${h}`).join(" ")].filter(Boolean).join("\n\n");
-  const why = !ed.gemini ? "Needs a Gemini key (GEMINI_API_KEY in .env)" : !ed.transcript ? "Transcribe the video first"
+  const why = !ed.writer ? "Needs a Gemini key (GEMINI_API_KEY in .env) or the local model in Ollama" : !ed.transcript ? "Transcribe the video first"
     : !s.ranges.length ? "Add a clip first" : undefined;
   return (
     <div className="post-text">
       <div className="row"><b>Post text</b>
         <button type="button" className="btn small" disabled={busy || !!why} title={why} onClick={write}>
-          {busy ? `Writing… ${waited} s` : post.title ? "Write again with Gemini" : "Write with Gemini"}
+          {busy ? `Writing… ${waited} s` : post.title ? "Write again" : "Write the post text"}
         </button>
       </div>
       {why && <p className="small muted">{why}.</p>}
-      {busy && waited >= 15 && <p className="small muted" role="status">Gemini is slow right now; it gives up within about a minute and a half and says so here.</p>}
+      {busy && waited >= 15 && <p className="small muted" role="status">Gemini is slow right now. If it doesn't answer within about a minute and a half, the local model writes it instead (another minute or so), or this says why not.</p>}
       {err && <p className="small err-text" role="alert">{err}</p>}
       <label className="field"><span className="small muted">Title</span>
         <input type="text" dir="auto" value={post.title} maxLength={100} placeholder="Shown above the video"

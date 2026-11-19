@@ -1,6 +1,8 @@
 """Translate a transcript sentence by sentence (Arabic <-> English).
 
-A small local instruction model (Qwen3-4B-Instruct, Apache-2.0) translates the
+Qwen3.8-27B through Ollama when it's running (see local_llm: as good as Gemini
+on these lectures), else a small local instruction model (Qwen3-4B-Instruct,
+Apache-2.0) in this process. Either translates the
 transcript a few sentences at a time, as numbered lines, so that a sentence
 the recogniser split in two is understood whole but each piece keeps its own
 translation (and timing). A glossary covers the usual formulas (ﷺ, رضي الله
@@ -224,6 +226,14 @@ def translate(video: Path, data: dict, lang: str = "en",
         missing = [v for v in fixed.values() if v not in text]
         out[k] = (text + " " + " ".join(missing)).strip() if missing else text
 
+    from . import local_llm
+
+    local = local_llm.available()
+    if local:  # one prompt at a time: Ollama queues them anyway
+        def generate(prompts: list[list[dict]], max_new: int) -> list[str]:
+            return [local_llm.chat(p, max_new=max_new) for p in prompts]
+    else:
+        generate = _generate
     groups = _groups(segs)
     retry: list[int] = []
     try:
@@ -233,7 +243,7 @@ def translate(video: Path, data: dict, lang: str = "en",
             prompts = [_group_prompt(src_lang, lang, source[max(0, g[0] - 2):g[0]], [jobs[k][1] for k in g],
                                      [r for k in g for r in jobs[k][2]]) for g in gs]
             longest = max(sum(len(jobs[k][1]) for k in g) for g in gs)
-            for g, text in zip(gs, _generate(prompts, max_new=int(longest * 0.9) + 30 * max(len(g) for g in gs) + 40)):
+            for g, text in zip(gs, generate(prompts, max_new=int(longest * 0.9) + 30 * max(len(g) for g in gs) + 40)):
                 lines = _parse(text, len(g))
                 if lines is None:
                     retry += g
@@ -246,10 +256,12 @@ def translate(video: Path, data: dict, lang: str = "en",
             ks = retry[b:b + BATCH]
             prompts = [_prompt(src_lang, lang, source[max(0, k - 2):k], jobs[k][1], jobs[k][2]) for k in ks]
             longest = max(len(jobs[k][1]) for k in ks)
-            for k, text in zip(ks, _generate(prompts, max_new=int(longest * 0.8) + 40)):
+            for k, text in zip(ks, generate(prompts, max_new=int(longest * 0.8) + 40)):
                 finish(k, text)
     finally:
         release()
+        if local:
+            local_llm.unload()  # the GPU is needed for the app's own models again
     if on_progress:
         on_progress(1.0)
     # keep hand-edited translations whose sentence hasn't changed since
@@ -259,7 +271,7 @@ def translate(video: Path, data: dict, lang: str = "en",
             out[k] = seg["text"]
     edited = [bool(old and len(old["segments"]) == len(out) and old["segments"][k].get("edited")
                    and old["segments"][k].get("source") == source[k]) for k in range(len(out))]
-    result = {"lang": lang, "source_lang": src_lang, "model": MODEL, "quran": QURAN_EN,
+    result = {"lang": lang, "source_lang": src_lang, "model": local or MODEL, "quran": QURAN_EN,
               "segments": [{"text": t, "source": s, **({"edited": True} if e else {})}
                            for t, s, e in zip(out, source, edited)]}
     translation_path(video, lang).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")

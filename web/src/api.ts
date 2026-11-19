@@ -212,7 +212,7 @@ export const api = {
   transcript: (id: string) => req<Transcript>(`/api/lectures/${id}/transcript`),
   editSegment: (id: string, k: number, text: string | null) =>
     req<Transcript>(`/api/lectures/${id}/transcript/segments/${k}`, json({ text }, "PUT")),
-  features: () => req<{ gemini: boolean }>("/api/features"),
+  features: () => req<{ gemini: boolean; local_model: string | null; writer: boolean }>("/api/features"),
   proofread: (id: string) => req<Job>(`/api/lectures/${id}/proofread`, { method: "POST" }),
   fillHoles: (id: string) => req<Job>(`/api/lectures/${id}/transcript/fill`, { method: "POST" }),
   describeShort: (id: string, sid: string) => req<Short>(`/api/lectures/${id}/shorts/${sid}/describe`, { method: "POST" }),

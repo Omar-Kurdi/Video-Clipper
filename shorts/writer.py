@@ -1,8 +1,25 @@
-"""Words around the video, written by Gemini from the transcript: a title and
-description for each short, and suggested moments worth making into shorts.
-Both are suggestions; the user edits or ignores them."""
-from .proofread import ask_json
+"""Words around the video, written by Gemini from the transcript (or the local
+model when Gemini can't answer): a title and description for each short, and
+suggested moments worth making into shorts. Both are suggestions; the user
+edits or ignores them."""
+from . import local_llm
+from .proofread import ProofreadError
+from .proofread import ask_json as ask_gemini
 from .util import fmt_time
+
+
+def ask_json(prompt: str, schema: dict, temperature: float = 0.4) -> tuple[object, str]:
+    """Gemini first; when it can't answer (busy, out of quota, no key), the local
+    model through Ollama if it's running (see local_llm)."""
+    try:
+        return ask_gemini(prompt, schema, temperature)
+    except ProofreadError as e:
+        if not local_llm.available():
+            raise
+        try:
+            return local_llm.ask_json(prompt, schema, temperature)
+        except Exception as local_error:
+            raise ProofreadError(f"{e}; the local model didn't answer either ({local_error})") from local_error
 
 LANG_NAME = {"ar": "Arabic", "en": "English"}
 
@@ -35,7 +52,7 @@ Don't name the speaker unless they are named in what is said or in the video tit
 
 
 def moments(data: dict, video_title: str | None, count: int = 8,
-            shortest: float = 20.0, longest: float = 90.0) -> list[dict]:
+            shortest: float = 20.0, longest: float = 180.0) -> list[dict]:
     """Stretches that stand on their own as a short: [{"s", "e", "title", "reason"}],
     snapped to sentence boundaries, best first."""
     segs = data["segments"]
@@ -62,7 +79,8 @@ Transcript:
         if not (0 <= a <= b < len(segs)):
             continue
         s, e = segs[a]["s"], segs[b]["e"]
-        if e - s < shortest * 0.7 or e - s > longest * 1.4:
+        # a little over `longest` is fine: cutting the pauses shortens it (YouTube Shorts take up to 3 minutes)
+        if e - s < shortest * 0.7 or e - s > longest * 1.2:
             continue
         if any(s < m["e"] and e > m["s"] for m in out):
             continue
