@@ -12,6 +12,7 @@ export interface Job {
   name?: string;
   created: number;
   started?: number;  // seconds (server clock), once it runs
+  until?: number | null;  // when what the message says ends (a wait, a time limit): for a countdown
 }
 
 export interface Lecture {

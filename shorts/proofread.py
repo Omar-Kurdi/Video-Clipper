@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,8 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 API = "https://generativelanguage.googleapis.com/v1beta"
 WINDOW = 5 * 60  # seconds of audio per request: short enough to answer in well under a minute
-PROOF_TIMEOUT = 180  # seconds one request may take before it's tried again or skipped
-PROOF_WAITS = (5, 15)  # a busy model is tried again after these, then the next model
+PART_LIMIT = 180  # seconds one part may take in all, every retry and model included
+ANSWER_LIMIT = 120  # seconds one request waits for Gemini's answer
+BUSY_WAITS = (5, 15)  # an overloaded model is asked again after these, then the next model is tried
 
 PROMPT = """You proofread an automatic transcript of an Arabic Islamic lecture{title}.
 You get the lecture audio and the transcript as numbered sentences with their start time in seconds.
@@ -127,7 +129,7 @@ def choose_models(key: str) -> list[str]:
     names = []
     page = ""
     while True:
-        out = _call(f"models?pageSize=200{'&pageToken=' + page if page else ''}", key)
+        out = _call(f"models?pageSize=200{'&pageToken=' + page if page else ''}", key, timeout=30, waits=(3,))
         names += [m["name"].removeprefix("models/") for m in out.get("models", [])
                   if "generateContent" in m.get("supportedGenerationMethods", [])]
         page = out.get("nextPageToken", "")
@@ -174,20 +176,24 @@ def _marked(data: dict, lo: float, hi: float) -> tuple[str, dict[int, int]]:
 
 def suggest(video: Path, data: dict, title: str | None = None, on_progress=None) -> tuple[list[dict], int]:
     """Gemini's readings for the doubtful words: ([{"i": word index, "word",
-    "reason"}], number of parts that couldn't be checked). The lecture goes in
-    parts of WINDOW seconds; a part Gemini doesn't answer in time (busy, slow)
-    is skipped so the rest still gets checked. on_progress(fraction, message)."""
+    "reason"}], number of parts that weren't checked). The lecture goes in parts
+    of WINDOW seconds, each with PART_LIMIT seconds in all: an overloaded model
+    is asked again after BUSY_WAITS, then the next model is tried. A part with
+    no answer in that time stops the proofreading (Gemini isn't answering now):
+    an error if nothing was checked yet, else the parts left count as skipped.
+    on_progress(fraction, message, until): until is when what the message
+    says ends (a wait, a time limit), for a countdown."""
     key = api_key()
     if not key:
         raise ProofreadError("set GEMINI_API_KEY in .env to use Gemini proofreading")
-    say = on_progress or (lambda f, m: None)
+    say = on_progress or (lambda f, m, until=None: None)
     say(0.0, "choosing a Gemini model")
     models = choose_models(key)
     end = max((w["e"] for w in data["words"]), default=0.0)
     windows = [(t, min(end, t + WINDOW)) for t in range(0, int(end) + 1, WINDOW)] or [(0, end)]
     parts = [(lo, hi, *_marked(data, lo, hi)) for lo, hi in windows]
     parts = [p for p in parts if p[3]]  # only parts with doubtful words
-    out, skipped, last_error = [], 0, None
+    out, skipped = [], 0
     for n, (lo, hi, text, ids) in enumerate(parts):
         where = f"part {n + 1} of {len(parts)}"
         say(n / len(parts), where)
@@ -202,23 +208,48 @@ def suggest(video: Path, data: dict, title: str | None = None, on_progress=None)
                                      "joins": {"type": "STRING", "enum": ["none", "previous", "next"]},
                                      "reason": {"type": "STRING"}}, "required": ["id", "word", "joins"]}}},
         }
-        res = None
-        for model in models:  # a busy, exhausted or slow model hands over to the next one
-            try:
-                res = _call(f"models/{model}:generateContent", key, body, timeout=PROOF_TIMEOUT, waits=PROOF_WAITS,
-                            on_wait=lambda w: say(n / len(parts), f"{where}: Gemini is busy, trying again in {w} s"))
+        res, why = None, ""
+        ends = time.monotonic() + PART_LIMIT
+        for m, model in enumerate(models):  # an overloaded, exhausted or slow model hands over to the next one
+            for attempt in range(len(BUSY_WAITS) + 1):
+                left = ends - time.monotonic()
+                if left < 10:
+                    break
+                wait_for = min(ANSWER_LIMIT, left)
+                say(n / len(parts), f"{where}: waiting for {model}'s answer, giving up in", time.time() + wait_for)
+                try:
+                    res = _call_once(f"models/{model}:generateContent", key, body, wait_for)
+                    break
+                except Busy as e:
+                    code = re.search(r"\((\d{3})\)", str(e))
+                    why = f"{model} is overloaded (Google answered {code.group(1) if code else 503})"
+                    wait = BUSY_WAITS[attempt] if attempt < len(BUSY_WAITS) else None
+                    if wait is None or ends - time.monotonic() < wait + 10:
+                        break
+                    say(n / len(parts), f"{where}: {why}; asking it again in", time.time() + wait)
+                    time.sleep(wait)
+                except OutOfQuota as e:
+                    why = f"{model}: {e}"
+                    break
+                except ProofreadError as e:
+                    if "timed out" not in str(e):
+                        raise  # a rejected key or a bad request: no point going on
+                    why = f"{model} didn't answer within {wait_for:.0f} s"
+                    break
+            if res is not None or ends - time.monotonic() < 10:
                 break
-            except (Busy, OutOfQuota) as e:
-                last_error = e
-            except ProofreadError as e:
-                if "timed out" not in str(e):
-                    raise  # a rejected key or a bad request: no point going on
-                last_error = e
-            if model != models[-1]:
-                say(n / len(parts), f"{where}: {last_error}; trying {models[models.index(model) + 1]}")
+            if m + 1 < len(models):
+                say(n / len(parts), f"{where}: {why}; trying {models[m + 1]} instead")
         if res is None:
-            skipped += 1
-            continue
+            # no answer within the part's time: Gemini isn't answering now, so stop rather than keep trying
+            why = why or "no answer"
+            if n == 0:
+                limit = f"{PART_LIMIT // 60} minutes" if PART_LIMIT >= 120 else f"{PART_LIMIT} seconds"
+                raise ProofreadError(f"Gemini didn't answer within {limit} ({why}). "
+                                     "Nothing was changed; try again later.")
+            skipped += len(parts) - n
+            say(n / len(parts), f"stopped: Gemini didn't answer for {where} ({why})")
+            break
         models = models[models.index(model):]  # stay with the one that answered
         try:
             items = json.loads(res["candidates"][0]["content"]["parts"][0]["text"])
@@ -231,7 +262,7 @@ def suggest(video: Path, data: dict, title: str | None = None, on_progress=None)
                 out.append({"i": i, "word": it["word"].strip(), "reason": str(it.get("reason", "")).strip(),
                             "joins": it.get("joins", "none"), "model": model})
     if parts and skipped == len(parts):
-        raise ProofreadError(f"Gemini didn't answer for any part: {last_error}")
+        raise ProofreadError("Gemini's answers couldn't be read for any part. Nothing was changed; try again later.")
     say(1.0, "applying Gemini's readings")
     return out, skipped
 

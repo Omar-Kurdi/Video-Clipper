@@ -454,7 +454,7 @@ def lecture_proofread(lid: str):
 
     def run(report):
         report(stage="proofreading")
-        return media.proofread(lid, lambda f, m="": report(progress=f, message=m))
+        return media.proofread(lid, lambda f, m="", until=None: report(progress=f, message=m, until=until))
     return jobs.submit("proofread", run, lane="io", lecture_id=lid)
 
 

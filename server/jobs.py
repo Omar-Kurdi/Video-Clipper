@@ -61,7 +61,8 @@ class Jobs:
             self._set(jid, status="running", started=time.time())
 
             def report(progress: float | None = None, stage: str | None = None,
-                       message: str | None = None, _jid=jid) -> None:
+                       message: str | None = None, until: float | None = None, _jid=jid) -> None:
+                """until: when what the message says ends (a wait, a time limit), for a countdown."""
                 upd = {}
                 if progress is not None:
                     upd["progress"] = round(float(progress), 4)
@@ -69,6 +70,7 @@ class Jobs:
                     upd["stage"] = stage
                 if message is not None:
                     upd["message"] = message
+                    upd["until"] = until
                 self._set(_jid, **upd)
 
             try:

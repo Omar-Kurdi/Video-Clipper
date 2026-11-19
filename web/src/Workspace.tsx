@@ -1028,6 +1028,16 @@ function Elapsed({ since }: { since: number }) {
   return <span className="tc">{fmt(Math.max(0, now - since), 0)}</span>;
 }
 
+/** Time left until `to` (seconds, server clock), ticking every second. */
+function Countdown({ to }: { to: number }) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span className="tc">{fmt(Math.max(0, to - now), 0)}</span>;
+}
+
 function TranscriptInfo({ ed }: { ed: Ed }) {
   const tr = ed.transcript!;
   const q = (tr.sources ?? []).filter((s) => s.type === "quran").length;
@@ -1063,10 +1073,11 @@ function TranscriptInfo({ ed }: { ed: Ed }) {
       {ed.proofreadJob ? (
         <span className="small" role="status">
           Gemini is proofreading{ed.proofreadJob.message ? `: ${ed.proofreadJob.message}` : "…"}
-          {ed.proofreadJob.started ? <> · <Elapsed since={ed.proofreadJob.started} /></> : " · waiting for another job to finish"}
+          {ed.proofreadJob.until ? <> <Countdown to={ed.proofreadJob.until} /></> : null}
+          {ed.proofreadJob.started ? <> · <Elapsed since={ed.proofreadJob.started} /> in all</> : " · waiting for another job to finish"}
         </span>
       ) : ed.gemini && !ed.transcribeJob && left > 0 && (
-        <button type="button" className="btn small" title="Send the audio and the transcript to Gemini (Google), which checks only the underlined words, five minutes of audio at a time. On Google's free tier, what you send may be used to improve Google's products."
+        <button type="button" className="btn small" title="Send the audio and the transcript to Gemini (Google), which checks only the underlined words, five minutes of audio at a time. If Gemini doesn't answer a part within 3 minutes it stops, keeping what was checked. On Google's free tier, what you send may be used to improve Google's products."
           onClick={() => ed.proofread()}>{ed.proofreadFailed ? "Try proofreading again" : tr.proofread ? `Proofread the ${left} doubtful word${left === 1 ? "" : "s"} left` : "Proofread doubtful words with Gemini"}</button>
       )}
       {ed.proofreadFailed && !ed.proofreadJob && <span className="small err-text" role="alert">Proofreading stopped: {ed.proofreadFailed.message}</span>}
