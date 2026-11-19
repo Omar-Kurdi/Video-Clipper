@@ -24,6 +24,22 @@ def _load_cuda12() -> None:
                     ctypes.CDLL(str(lib), mode=ctypes.RTLD_GLOBAL)
 
 
+@lru_cache(maxsize=None)
+def _cuda_compute(small: bool = False) -> str:
+    """The best compute type this GPU runs efficiently. Cards older than Volta
+    (GTX 10xx and earlier) have no fast float16, and CTranslate2 refuses it
+    there, so they get int8 weights with float32 maths. `small`: the 8-bit
+    choice, for when the GPU is short of memory."""
+    import ctranslate2
+
+    _load_cuda12()
+    have = ctranslate2.get_supported_compute_types("cuda")
+    for c in (("int8_float16", "int8_float32", "int8") if small else ("float16", "int8_float32", "float32")):
+        if c in have:
+            return c
+    return "default"
+
+
 @lru_cache(maxsize=1)
 def _model(model: str, device: str, compute: str | None = None):
     """Loaded once per process (the web server reuses it between jobs)."""
@@ -31,7 +47,7 @@ def _model(model: str, device: str, compute: str | None = None):
 
     if device == "cuda":
         _load_cuda12()
-    return WhisperModel(model, device=device, compute_type=compute or ("float16" if device == "cuda" else "int8"))
+    return WhisperModel(model, device=device, compute_type=compute or (_cuda_compute() if device == "cuda" else "int8"))
 
 
 def words_path(video: Path) -> Path:
@@ -334,7 +350,10 @@ def transcribe(video: Path, model: str = "large-v3", language: str | None = "ar"
     tashkeel = engine == "tashkeel" and (language or "ar") == "ar" and device == "cuda"
     share = 0.55 if tashkeel else 0.95
     # when other programs fill the GPU, retry in 8-bit: about half the memory, nearly the same text
-    for compute in ([None, "int8_float16"] if device == "cuda" else [None]):
+    retry = [None, _cuda_compute(small=True)] if device == "cuda" else [None]
+    if device == "cuda" and retry[1] == _cuda_compute():
+        retry = [None]  # already 8-bit: nothing smaller to retry with
+    for compute in retry:
         try:
             words, lines, segs, info = _whisper_pass(video, _model(model, device, compute), language,
                                                      on_progress, share)
