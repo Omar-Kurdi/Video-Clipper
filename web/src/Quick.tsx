@@ -89,7 +89,7 @@ function textCss(ts: TextStyle, k: number): React.CSSProperties {
     paintOrder: "stroke fill",
     textShadow: ts.shadow ? `0 ${ts.shadow * k * 0.3}px ${ts.shadow * k}px rgba(0,0,0,0.85)` : undefined,
     // a caption that may take two lines wraps as the render does: balanced, within 960 of the 1080 px
-    ...((ts.lines ?? 1) > 1 ? { whiteSpace: "normal", width: "max-content", maxWidth: 960 * k, textWrap: "balance", textAlign: "center", lineHeight: 1.25 } : {}),
+    ...((ts.lines ?? 1) > 1 || ts.split === "pauses" ? { whiteSpace: "normal", width: "max-content", maxWidth: 960 * k, textWrap: "balance", textAlign: "center", lineHeight: 1.8 } : {}),
   };
 }
 
@@ -165,6 +165,7 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
       e: c.timed && k === c.words.length - 1 ? c.src[1] : w.e,
     } as Word)));
   }, [ed.captions, s.captions]);
+  const capRows = useMemo(() => (s.captions && ed.captions ? ed.captions.captions.map((c) => c.rows) : []), [ed.captions, s.captions]);
 
   const place = (v: HTMLVideoElement | null) => {
     if (!v) return;
@@ -365,15 +366,34 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
       <div className="phone-frame quick-frame" style={{ width, height }} onClick={toggle}>
         <video ref={v0} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline onLoadedMetadata={(e) => { place(e.currentTarget); e.currentTarget.playbackRate = rate; }} />
         <video ref={v1} src={api.videoUrl(ed.lecture.id)} preload="auto" playsInline style={{ opacity: 0 }} onLoadedMetadata={(e) => { place(e.currentTarget); e.currentTarget.playbackRate = rate; }} />
-        {chunk && capStyle && (
-          <div ref={capBox} className="q-cap" dir={rtl(chunk[0].w) ? "rtl" : "ltr"} style={textCss(capStyle, k)}>
-            {chunk.map((w, i) => (
-              <span key={i} style={capStyle.highlight && w.s <= srcT && (chunk[i + 1]?.s ?? Infinity) > srcT ? { color: capStyle.highlight } : undefined}>
-                {w.w}{i < chunk.length - 1 ? " " : ""}
-              </span>
-            ))}
-          </div>
-        )}
+        {chunk && capStyle && (() => {
+          const word = (w: Word, i: number, last: boolean) => (
+            <span key={i} style={capStyle.highlight && w.s <= srcT && (chunk[i + 1]?.s ?? Infinity) > srcT ? { color: capStyle.highlight } : undefined}>
+              {w.w}{last ? "" : " "}
+            </span>
+          );
+          const dir = rtl(chunk[0].w) ? "rtl" : "ltr";
+          const rows = capRows[chunkIdx];
+          if (!rows || rows.length < 2) {
+            return <div ref={capBox} className="q-cap" dir={dir} style={textCss(capStyle, k)}>
+              {chunk.map((w, i) => word(w, i, i === chunk.length - 1))}
+            </div>;
+          }
+          // on more lines: each its own line (and box), spaced as the render stacks them
+          const css = textCss(capStyle, k);
+          const marks = /[\u064B-\u0652\u0670]/.test(chunk.map((w) => w.w).join(""));
+          const gap = capStyle.box ? 6 * k : (capStyle.size * 0.12 - capStyle.pad_y) * k;
+          let at = 0;
+          return <div ref={capBox} className="q-cap q-rows" dir={dir} style={{ top: css.top, rowGap: gap }}>
+            {rows.map((n, r) => {
+              const from = at;
+              at += n;
+              return <div key={r} style={{ ...css, top: undefined, whiteSpace: "nowrap", lineHeight: marks ? 1.8 : 1.3 }}>
+                {chunk.slice(from, from + n).map((w, j) => word(w, from + j, j === n - 1))}
+              </div>;
+            })}
+          </div>;
+        })()}
         {sub && capStyle && (() => {
           // the second line (a translation), under the caption as in the render
           const ss = { ...capStyle, size: Math.max(30, Math.round(capStyle.size * 0.6)), pad_x: Math.max(10, Math.round(capStyle.pad_x * 0.8)),
@@ -385,7 +405,7 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
         })()}
         {qSpan && capStyle && (
           <div className="q-cap q-tag" dir={tagLang === "ar" ? "rtl" : "ltr"} style={{
-            top: (capStyle.lines ?? 1) > 1 && curH
+            top: ((capStyle.lines ?? 1) > 1 || capStyle.split === "pauses") && curH
               ? `calc(${capStyle.y * 100}% - ${curH / 2 + Math.max(26, capStyle.size * 0.5) * 0.75 * k + 6 * k}px)`
               : `calc(${capStyle.y * 100}% - ${(capStyle.size * 0.95 + capStyle.pad_y + 30) * k}px)`,
             fontFamily: `"${capStyle.font.split(":")[0]}", "Noto Sans Arabic", sans-serif`,

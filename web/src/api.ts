@@ -94,6 +94,7 @@ export interface Moment { s: number; e: number; title: string; reason: string }
 export interface Caption {
   s: number; e: number; src: Range; key: number; timed: boolean;
   words: { w: string; i: number | null; t: number; e: number; raw: string }[];  // t/e: the word in the lecture (t names it in edits)
+  rows?: number[];  // words per line, where the render wraps this caption
 }
 /** The second caption line (a translation under the original). */
 export interface SubCaption { s: number; e: number; src: Range; text: string }

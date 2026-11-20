@@ -44,8 +44,8 @@ class TextStyle:
     max_seconds: float = 0.0        # longest a caption stays up (0: no limit); longer ones are split
     lines: int = 1                  # a caption too wide for one line wraps onto up to this many
     phrases: bool = False           # a caption ends where a phrase does (، . ؟ and the like)
-    split: str = "words"            # "words": at most max_words a caption; "pauses": all the
-                                    # words between two pauses (a long run split evenly to fit `lines`)
+    split: str = "words"            # "words": at most max_words a caption; "pauses": as spoken,
+                                    # found by spoken_chunks (no word count or lines to set)
     fade_ms: int = 90
 
 
@@ -56,27 +56,28 @@ class Style:
 
 
 CAPTION_Y = 0.83  # captions sit a third of the way below the centre (-33 on the height slider)
+SPOKEN = "pauses"  # every preset splits captions as spoken (see spoken_chunks); "words" to count words
 
 PRESETS: dict[str, Style] = {
     # dark translucent box, like the reference short
-    "box": Style(TextStyle(y=CAPTION_Y),
+    "box": Style(TextStyle(y=CAPTION_Y, split=SPOKEN),
                  TextStyle(size=44, color="#FFD54A", box_opacity=0.55, radius=10,
                            pad_x=22, pad_y=10, y=0.60)),
     # rounded pill, spoken word highlighted
-    "pill": Style(TextStyle(radius=40, box_opacity=0.72, pad_x=40, pad_y=18, highlight="#FFD54A", y=CAPTION_Y),
+    "pill": Style(TextStyle(radius=40, box_opacity=0.72, pad_x=40, pad_y=18, highlight="#FFD54A", y=CAPTION_Y, split=SPOKEN),
                   TextStyle(size=42, color="#111111", box_color="#FFD54A", box_opacity=1.0,
                             radius=30, pad_x=28, pad_y=10, y=0.60)),
     # no box, thick outline (classic shorts look)
     "outline": Style(TextStyle(size=76, box=False, outline=7, shadow=6, highlight="#FFD54A",
-                               max_words=2, max_chars=16, y=CAPTION_Y),
+                               max_words=2, max_chars=16, y=CAPTION_Y, split=SPOKEN),
                      TextStyle(size=44, color="#FFD54A", box=False, outline=5, y=0.60)),
     # a whole phrase at a time on up to two lines, heavy white text with an
     # outline, no box, no highlight; gone while the speaker pauses
     "phrase": Style(TextStyle(size=74, box=False, outline=4, shadow=8, pad_y=10,
-                              max_words=8, max_chars=44, lines=2, phrases=True, y=0.64),
+                              max_words=8, max_chars=44, lines=2, phrases=True, y=0.64, split=SPOKEN),
                     TextStyle(size=44, color="#FFD54A", box=False, outline=5, y=0.60)),
     # quiet: soft shadow only
-    "minimal": Style(TextStyle(size=60, box=False, shadow=10, y=CAPTION_Y),
+    "minimal": Style(TextStyle(size=60, box=False, shadow=10, y=CAPTION_Y, split=SPOKEN),
                      TextStyle(size=40, color="#E8E8E8", box=False, shadow=8, y=0.60)),
 }
 
@@ -167,41 +168,154 @@ def word_key(w) -> float:
 PHRASE_END = re.compile(r"[،؛؟.!?:;,…]$")
 
 
-def _fits_lines(words: list[str], ts: TextStyle, max_width: int = 960) -> bool:
-    """Whether the words fit in ts.lines lines at the caption's size (with some
-    room to spare, as lines rarely break at the exact middle)."""
-    text = " ".join(words)
-    rtl = _is_rtl(text)
+# ---------- captions as spoken ----------
+
+_TASHKEEL = re.compile("[\u064B-\u0652\u0670\u0640]")
+_PUNCT = re.compile(r"[،؛؟.!?:;,…«»\"'()\[\]]")
+
+
+def norm_ar(w: str) -> str:
+    """A word for matching: no harakat, tatweel or punctuation, one alif, ى as ي, ة as ه."""
+    w = _PUNCT.sub("", _TASHKEEL.sub("", w))
+    return w.translate(str.maketrans("أإآٱىة", "اااايه"))
+
+
+# a caption never ends right after one of these (it needs the word after it)
+NEEDS_NEXT = set("""في من الي علي عن حتي ان لا ما لم لن قد يا او ثم بل لكن كي لكي عند مع بين بعد قبل
+لذلك لو اذا اذ لما حين عندما كما كيف هل اما لماذا
+الذي التي الذين اللذين اللتين اللاتي اللائي عبد رسول نبي بن ابن ابي ابو ام بنت
+سوره ايه قول بسم و ف ب ل ك اي يعني لان لانه لانها كان كانت ليس انه انها انما
+صلي رضي رحمه عز سبحانه تبارك جل""".split())
+# nor right before one of these (they belong to the name or word before them)
+JOINS_PREV = set("""صلي رضي رحمه رحمهم تعالي سبحانه عز وجل وسلم وتعالي بن ابن بنت عنه عنها عنهما عنهم
+السلام الصلاه""".split())
+# a good place to start a caption: a word that opens a clause
+CLAUSE = set("""ثم حتي لان لانه لانها لكن بل او ام اذا اذ ان انه انها انما لما حين عندما كما قال يقول قالوا
+الذي التي الذين اي يعني لذلك كذلك هذا هذه فان وان فانما وانما ولذلك وكذلك فلما ولما فقال وقال ثم
+لو ولو فلو كيف لماذا هل اما واما فاما""".split())
+PREP = set("في من الي علي عن مع عند".split())
+
+
+def _break_score(prev: str, nxt: str) -> float | None:
+    """How well a caption ends between two words, from the words alone:
+    None where it must not, else a bonus (0 = no reason to)."""
+    p, n = norm_ar(prev), norm_ar(nxt)
+    if p in NEEDS_NEXT or n in JOINS_PREV or (len(p) > 1 and p[0] in "وف" and p[1:] in NEEDS_NEXT):
+        return None
+    if p == "الله" and n in ("عليه", "عنه", "عنها", "عنهما", "عنهم", "تعالي"):
+        return None
+    if n in CLAUSE:
+        return 1.2
+    if n in PREP or (len(n) > 3 and n[0] in "وف" and n[1:] in CLAUSE):
+        return 1.0
+    if len(n) > 3 and n[0] in "وف":  # و/ف and a word: most often "and ..."
+        return 0.5
+    return 0.0
+
+
+def spoken_chunks(mapped: list[Word], ts: TextStyle, pause_of=None, hard=None,
+                  starts: set | None = None, joins: set | None = None) -> list[list[Word]]:
+    """Captions as the speaker says them, with no word count to set.
+
+    The places a caption ends are chosen together, stretch by stretch:
+    where the speaker pauses (`pause_of(a, b)`, seconds, from the audio; a cut
+    counts as a long pause), where the transcript starts a new line (`hard(a, b)`),
+    where a new clause starts (و، حتى، إنما، أو، في…), never inside a name
+    or a formula (رسول الله، صلى الله عليه وسلم، رضي الله عنه) or right after
+    a particle (في، من، أن، لم…). Captions aim for one line; one that can't
+    be split well takes two. `starts`/`joins`: the user's own splits."""
+    starts, joins = starts or set(), joins or set()
+    key = lambda w: word_key(w) if len(w) > 4 else None  # noqa: E731
+    if not mapped:
+        return []
+    rtl = _is_rtl(" ".join(w[0] for w in mapped[:20]))
     font = _font(ts.font if rtl else _latin(ts.font), ts.size)
-    room = (max(max_width, 960) if ts.lines > 1 else 800) - 2 * ts.pad_x - 2 * (ts.shadow * 2 + ts.outline)
-    return font.getlength(text, direction="rtl" if rtl else "ltr") <= room * max(1, ts.lines) * 0.85
+    d = "rtl" if rtl else "ltr"
+    room = 960 - 2 * ts.pad_x - 2 * (ts.shadow * 2 + ts.outline)
+    wid = [font.getlength(w[0], direction=d) for w in mapped]
+    space = font.getlength(" ", direction=d)
+
+    def pause(a, b) -> float:
+        return pause_of(a, b) if pause_of else max(0.0, b[1] - a[2])
+
+    # stretches between hard breaks
+    runs, cur = [], [0]
+    for i in range(1, len(mapped)):
+        a, b = mapped[i - 1], mapped[i]
+        if key(b) not in joins and (key(b) in starts or pause(a, b) == float("inf") or b[1] - a[2] > 1.0):
+            runs.append(cur)
+            cur = []
+        cur.append(i)
+    runs.append(cur)
+
+    out = []
+    for run in runs:
+        n = len(run)
+        # cost of ending a caption before run[j]
+        bcost = [0.0] * n
+        for j in range(1, n):
+            a, b = mapped[run[j - 1]], mapped[run[j]]
+            if key(b) in joins:
+                bcost[j] = 1e6
+                continue
+            score = _break_score(a[0], b[0]) if rtl else 0.0
+            p = pause(a, b)
+            if score is None:  # a hesitation after في/لم… or inside a name: not here unless nothing else fits
+                bcost[j] = 60.0
+                continue
+            if hard and hard(a, b):  # a new line of the transcript: as strong as a long pause
+                p = max(p, 0.8)
+            pb = 0.0 if p < 0.12 else 2.0 + 3.0 * min(p, 0.8)
+            # no pause and no new clause: only where a caption would be too long otherwise
+            bcost[j] = 2.5 - pb - score + (3.0 if pb == 0 and score == 0 else 0.0)
+
+        def pcost(i: int, j: int) -> float:  # a caption of run[i:j]
+            k = j - i
+            w = sum(wid[run[x]] for x in range(i, j)) + space * (k - 1)
+            c = 0.0
+            if w > room:
+                c += 2.0 if w <= 2 * room * 0.9 or k == 1 else 1e5 * (w / room)
+            c += max(0.0, w / room - 0.85) * 6  # nearly a full line, or more
+            if k == 1:
+                c += 1.4
+            elif k == 2:
+                c += 0.2
+            return c
+
+        best = [0.0] + [float("inf")] * n
+        prev = [0] * (n + 1)
+        for j in range(1, n + 1):
+            for i in range(max(0, j - 16), j):
+                c = best[i] + pcost(i, j) + (bcost[i] if i > 0 else 0.0)
+                if c < best[j]:
+                    best[j], prev[j] = c, i
+        cuts, j = [], n
+        while j > 0:
+            cuts.append((prev[j], j))
+            j = prev[j]
+        for i, j in reversed(cuts):
+            out.append([mapped[run[x]] for x in range(i, j)])
+    return out
 
 
 def chunk(mapped: list[Word], ts: TextStyle, break_gap: float = 0.3,
           starts: set | None = None, joins: set | None = None,
-          group_of=None) -> list[list[Word]]:
+          pause_of=None, hard=None) -> list[list[Word]]:
     """Words into captions. `starts`/`joins` (word keys, see word_key) are the
     user's own splits: a word in `starts` always begins a caption, one in
     `joins` never does. With `ts.phrases` a caption also ends with its phrase,
     and a phrase too long for one caption is split into even parts.
 
-    With ts.split == "pauses" a caption is the speech between two pauses:
-    `group_of(word)` names the stretch of speech a word is in (see
-    pipeline._speech_groups), a new stretch starts a new caption, and a caption
-    is split only when it won't fit. Without it, gaps between words count."""
+    With ts.split == "pauses" captions follow the speech: see spoken_chunks
+    (`pause_of`, `hard`: from pipeline._spoken_inputs)."""
+    if ts.split == "pauses":
+        return spoken_chunks(mapped, ts, pause_of, hard, starts, joins)
     starts, joins = starts or set(), joins or set()
-    pauses = ts.split == "pauses"
     key = lambda w: word_key(w) if len(w) > 4 else None  # noqa: E731
-    if pauses:
-        too_big = lambda ws: (not _fits_lines([x[0] for x in ws], ts)  # noqa: E731
-                              or (ts.max_seconds > 0 and ws[-1][2] - ws[0][1] > ts.max_seconds))
-    else:
-        too_big = lambda ws: (len(ws) > ts.max_words or len(" ".join(x[0] for x in ws)) > ts.max_chars  # noqa: E731
-                              or (ts.max_seconds > 0 and ws[-1][2] - ws[0][1] > ts.max_seconds))
+    too_big = lambda ws: (len(ws) > ts.max_words or len(" ".join(x[0] for x in ws)) > ts.max_chars  # noqa: E731
+                          or (ts.max_seconds > 0 and ws[-1][2] - ws[0][1] > ts.max_seconds))
 
     def gap(a, b) -> bool:  # a pause between two words
-        if pauses and group_of and len(a) > 5 and len(b) > 5 and group_of(a) != group_of(b):
-            return True
         return b[1] - a[2] > break_gap
 
     chunks, cur, by_size = [], [], []  # by_size: the caption was ended only because it was full
@@ -219,7 +333,7 @@ def chunk(mapped: list[Word], ts: TextStyle, break_gap: float = 0.3,
     if cur:
         chunks.append(cur)
         by_size.append(False)
-    if ts.phrases or pauses:  # 8 words then 2 reads worse than 5 and 5: move words to the next part
+    if ts.phrases:  # 8 words then 2 reads worse than 5 and 5: move words to the next part
         for i in range(len(chunks) - 1):
             a, b = chunks[i], chunks[i + 1]
             while (by_size[i] and len(a) - 1 > len(b) and key(a[-1]) not in joins
@@ -285,6 +399,12 @@ def _ink_extent(pattern: str, size: int, rtl: bool, marks: bool = False) -> tupl
     return int(rows[0]) - size, int(rows[-1]) - size + 1
 
 
+def lines_of(ts: TextStyle) -> int:
+    """How many lines a caption may take: captions as spoken take two when one
+    can't be split well."""
+    return max(ts.lines, 2) if ts.split == "pauses" else ts.lines
+
+
 def _rows(words: tuple[str, ...], ts: TextStyle, max_width: int) -> list[tuple[str, ...]]:
     """The caption as one line if it fits, else in up to ts.lines lines of
     about the same width (the fewest that fit)."""
@@ -297,7 +417,7 @@ def _rows(words: tuple[str, ...], ts: TextStyle, max_width: int) -> list[tuple[s
     if width(words) <= room:
         return [words]
     best = [words]
-    for n in range(2, min(ts.lines, len(words)) + 1):
+    for n in range(2, min(lines_of(ts), len(words)) + 1):
         splits = [[words[a:b] for a, b in zip((0, *cut), (*cut, len(words)))]
                   for cut in combinations(range(1, len(words)), n - 1)]
         best = min(splits, key=lambda rows: max(width(r) for r in rows))
@@ -311,11 +431,11 @@ def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
     """RGBA image of one caption (on more lines if ts.lines allows and it is
     too wide for one). Words are laid out right-to-left for RTL scripts, so
     punctuation stays at the end of the sentence."""
-    if ts.lines > 1 and len(words) > 1:
+    if lines_of(ts) > 1 and len(words) > 1:
         max_width = max(max_width, 960)  # a phrase may use most of the frame's width
         rows = _rows(words, ts, max_width)
         if len(rows) > 1:
-            one, imgs, k = replace(ts, lines=1), [], 0
+            one, imgs, k = replace(ts, lines=1, split="words"), [], 0
             for r in rows:
                 imgs.append(render_text(r, one, active - k if active >= 0 else -1, max_width))
                 k += len(r)
@@ -496,7 +616,7 @@ class Overlay:
         tag, above, ta = self._tag(t)
         img, alpha = self._caption(t)
         if tag is not None:
-            if img is not None and self.style.captions.lines > 1:  # right above this caption, one line or two
+            if img is not None and lines_of(self.style.captions) > 1:  # right above this caption, one line or two
                 above = img.shape[0] / 2 + tag.shape[0] / 2 + 6
             self._blit(frame, tag, self.style.captions.y - above / frame.shape[0], ta)
         if img is not None:

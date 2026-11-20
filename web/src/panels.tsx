@@ -638,19 +638,18 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
             <label className="field">Size {cap.size}<input type="range" min={36} max={110} step={2} value={cap.size} onChange={(e) => patch({ size: +e.target.value })} /></label>
             <label className="field">Corners {cap.radius}<input type="range" min={0} max={60} step={2} value={cap.radius} onChange={(e) => patch({ radius: +e.target.value })} /></label>
             <label className="field">Outline {cap.outline}<input type="range" min={0} max={12} step={1} value={cap.outline} onChange={(e) => patch({ outline: +e.target.value })} /></label>
-            <label className="field" title="At pauses: each caption is what is said between two pauses, so a cut or a transition starts a new caption; a long stretch is split evenly where it won't fit">Split captions
-              <select value={cap.split ?? "words"} onChange={(e) => patch(e.target.value === "pauses"
-                ? { split: "pauses", lines: Math.max(cap.lines ?? 1, 2) } : { split: "words" })}>
+            <label className="field" title="As spoken: each caption ends where the speaker pauses or a new phrase starts, never inside a name or a formula such as صلى الله عليه وسلم; a cut or a transition starts a new caption. Nothing to set.">Split captions
+              <select value={cap.split ?? "words"} onChange={(e) => patch({ split: e.target.value as "words" | "pauses" })}>
                 <option value="words">By word count</option>
-                <option value="pauses">At pauses</option>
+                <option value="pauses">As spoken (automatic)</option>
               </select>
             </label>
-            {(cap.split ?? "words") === "words"
-              ? <label className="field">Words per caption {cap.max_words}<input type="range" min={1} max={10} step={1} value={cap.max_words} onChange={(e) => patch({ max_words: +e.target.value, max_chars: 8 * +e.target.value })} /></label>
-              : <label className="field">Lines {cap.lines ?? 1}<input type="range" min={1} max={3} step={1} value={cap.lines ?? 1} onChange={(e) => patch({ lines: +e.target.value })} /></label>}
-            <label className="field">Longest caption {cap.max_seconds ? `${cap.max_seconds.toFixed(1)} s` : "no limit"}
-              <input type="range" min={0} max={6} step={0.5} value={cap.max_seconds ?? 0}
-                onChange={(e) => patch({ max_seconds: +e.target.value })} /></label>
+            {(cap.split ?? "words") === "words" && <>
+              <label className="field">Words per caption {cap.max_words}<input type="range" min={1} max={10} step={1} value={cap.max_words} onChange={(e) => patch({ max_words: +e.target.value, max_chars: 8 * +e.target.value })} /></label>
+              <label className="field">Longest caption {cap.max_seconds ? `${cap.max_seconds.toFixed(1)} s` : "no limit"}
+                <input type="range" min={0} max={6} step={0.5} value={cap.max_seconds ?? 0}
+                  onChange={(e) => patch({ max_seconds: +e.target.value })} /></label>
+            </>}
             <label className="field">Font
               <select value={cap.font} onChange={(e) => { patch({ font: e.target.value }); }}>
                 <option value="Noto Sans Arabic:style=Bold">Noto Sans Arabic Bold</option>
