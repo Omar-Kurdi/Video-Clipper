@@ -528,7 +528,7 @@ export function FramingPanel({ ed }: { ed: Ed }) {
 
 /* ---------- captions & name plate ---------- */
 
-const PRESET_LABEL: Record<string, string> = { box: "Box", pill: "Pill", outline: "Outline", minimal: "Minimal" };
+const PRESET_LABEL: Record<string, string> = { box: "Box", pill: "Pill", outline: "Outline", phrase: "Phrase", minimal: "Minimal" };
 
 export function effectiveData(ed: Ed): StyleData {
   const s = ed.short!;
@@ -638,7 +638,7 @@ export function CaptionsPanel({ ed, compact }: { ed: Ed; compact?: boolean }) {
             <label className="field">Size {cap.size}<input type="range" min={36} max={110} step={2} value={cap.size} onChange={(e) => patch({ size: +e.target.value })} /></label>
             <label className="field">Corners {cap.radius}<input type="range" min={0} max={60} step={2} value={cap.radius} onChange={(e) => patch({ radius: +e.target.value })} /></label>
             <label className="field">Outline {cap.outline}<input type="range" min={0} max={12} step={1} value={cap.outline} onChange={(e) => patch({ outline: +e.target.value })} /></label>
-            <label className="field">Words per caption {cap.max_words}<input type="range" min={1} max={6} step={1} value={cap.max_words} onChange={(e) => patch({ max_words: +e.target.value, max_chars: 8 * +e.target.value })} /></label>
+            <label className="field">Words per caption {cap.max_words}<input type="range" min={1} max={10} step={1} value={cap.max_words} onChange={(e) => patch({ max_words: +e.target.value, max_chars: 8 * +e.target.value })} /></label>
             <label className="field">Longest caption {cap.max_seconds ? `${cap.max_seconds.toFixed(1)} s` : "no limit"}
               <input type="range" min={0} max={6} step={0.5} value={cap.max_seconds ?? 0}
                 onChange={(e) => patch({ max_seconds: +e.target.value })} /></label>

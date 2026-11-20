@@ -88,6 +88,8 @@ function textCss(ts: TextStyle, k: number): React.CSSProperties {
     WebkitTextStroke: ts.outline ? `${ts.outline * k * 2}px ${ts.outline_color}` : undefined,
     paintOrder: "stroke fill",
     textShadow: ts.shadow ? `0 ${ts.shadow * k * 0.3}px ${ts.shadow * k}px rgba(0,0,0,0.85)` : undefined,
+    // a caption that may take two lines wraps as the render does: balanced, within 960 of the 1080 px
+    ...((ts.lines ?? 1) > 1 ? { whiteSpace: "normal", width: "max-content", maxWidth: 960 * k, textWrap: "balance", textAlign: "center", lineHeight: 1.25 } : {}),
   };
 }
 
@@ -141,9 +143,11 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
   // the tallest caption box shown so far (px): the second line goes under it
   const capBox = useRef<HTMLDivElement>(null);
   const [capH, setCapH] = useState(0);
+  const [curH, setCurH] = useState(0);  // the caption shown now (the verse tag goes right above a two-line one)
   useLayoutEffect(() => {
     const h = capBox.current?.offsetHeight ?? 0;
     if (h > capH) setCapH(h);
+    if (h && h !== curH) setCurH(h);
   });
   useEffect(() => { setCapH(0); }, [width, s.style, s.style_data]);
 
@@ -381,7 +385,9 @@ export function QuickPlayer({ ed, width, overlay }: { ed: Ed; width: number; ove
         })()}
         {qSpan && capStyle && (
           <div className="q-cap q-tag" dir={tagLang === "ar" ? "rtl" : "ltr"} style={{
-            top: `calc(${capStyle.y * 100}% - ${(capStyle.size * 0.95 + capStyle.pad_y + 30) * k}px)`,
+            top: (capStyle.lines ?? 1) > 1 && curH
+              ? `calc(${capStyle.y * 100}% - ${curH / 2 + Math.max(26, capStyle.size * 0.5) * 0.75 * k + 6 * k}px)`
+              : `calc(${capStyle.y * 100}% - ${(capStyle.size * 0.95 + capStyle.pad_y + 30) * k}px)`,
             fontFamily: `"${capStyle.font.split(":")[0]}", "Noto Sans Arabic", sans-serif`,
             fontSize: Math.max(26, capStyle.size * 0.5) * k,
           }}>{quranLabel(qRef!, tagLang)}</div>

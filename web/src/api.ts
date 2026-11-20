@@ -51,6 +51,8 @@ export interface TextStyle {
   max_words: number;
   max_chars: number;
   max_seconds?: number;  // longest a caption stays up, 0 = no limit
+  lines?: number;  // a caption too wide for one line wraps onto up to this many
+  phrases?: boolean;  // a caption ends where a phrase does
   fade_ms: number;
 }
 

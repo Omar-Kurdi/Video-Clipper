@@ -268,7 +268,7 @@ Joins that land on a camera change are always clean hard cuts, and the crop
 switches on that exact frame.
 
 ### Caption styles
-`--style pill|box|outline|minimal` (default `pill`), or a JSON file that starts from a preset
+`--style pill|box|outline|phrase|minimal` (default `pill`), or a JSON file that starts from a preset
 and overrides any field — see [styles/example.json](styles/example.json):
 
 | key | meaning |
@@ -279,6 +279,8 @@ and overrides any field — see [styles/example.json](styles/example.json):
 | `outline`, `outline_color`, `shadow` | text stroke and soft shadow |
 | `y` | vertical centre (0 = top, 1 = bottom) |
 | `max_words`, `max_chars`, `fade_ms` | caption chunking and fade-in |
+| `lines` | a caption too wide for one line wraps onto up to this many (`phrase`: 2) |
+| `phrases` | end a caption where a phrase does (، . ؟ …), splitting a long one evenly |
 
 `captions` styles the subtitles, `title` the name plate (`--title "..."`).
 

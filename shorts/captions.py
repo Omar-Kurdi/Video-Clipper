@@ -42,6 +42,8 @@ class TextStyle:
     max_words: int = 3
     max_chars: int = 22
     max_seconds: float = 0.0        # longest a caption stays up (0: no limit); longer ones are split
+    lines: int = 1                  # a caption too wide for one line wraps onto up to this many
+    phrases: bool = False           # a caption ends where a phrase does (، . ؟ and the like)
     fade_ms: int = 90
 
 
@@ -66,6 +68,11 @@ PRESETS: dict[str, Style] = {
     "outline": Style(TextStyle(size=76, box=False, outline=7, shadow=6, highlight="#FFD54A",
                                max_words=2, max_chars=16, y=CAPTION_Y),
                      TextStyle(size=44, color="#FFD54A", box=False, outline=5, y=0.60)),
+    # a whole phrase at a time on up to two lines, heavy white text with an
+    # outline, no box, no highlight; gone while the speaker pauses
+    "phrase": Style(TextStyle(size=74, box=False, outline=4, shadow=8, pad_y=10,
+                              max_words=8, max_chars=44, lines=2, phrases=True, y=0.64),
+                    TextStyle(size=44, color="#FFD54A", box=False, outline=5, y=0.60)),
     # quiet: soft shadow only
     "minimal": Style(TextStyle(size=60, box=False, shadow=10, y=CAPTION_Y),
                      TextStyle(size=40, color="#E8E8E8", box=False, shadow=8, y=0.60)),
@@ -155,25 +162,40 @@ def word_key(w) -> float:
     return round(w[4], 2)
 
 
+PHRASE_END = re.compile(r"[،؛؟.!?:;,…]$")
+
+
 def chunk(mapped: list[Word], ts: TextStyle, break_gap: float = 0.3,
           starts: set | None = None, joins: set | None = None) -> list[list[Word]]:
     """Words into captions. `starts`/`joins` (word keys, see word_key) are the
     user's own splits: a word in `starts` always begins a caption, one in
-    `joins` never does."""
+    `joins` never does. With `ts.phrases` a caption also ends with its phrase,
+    and a phrase too long for one caption is split into even parts."""
     starts, joins = starts or set(), joins or set()
-    chunks, cur = [], []
+    key = lambda w: word_key(w) if len(w) > 4 else None  # noqa: E731
+    too_big = lambda ws: (len(ws) > ts.max_words or len(" ".join(x[0] for x in ws)) > ts.max_chars  # noqa: E731
+                          or (ts.max_seconds > 0 and ws[-1][2] - ws[0][1] > ts.max_seconds))
+    chunks, cur, by_size = [], [], []  # by_size: the caption was ended only because it was full
     for w in mapped:
-        key = word_key(w) if len(w) > 4 else None
-        if cur and key in starts or cur and key not in joins and (
-                len(cur) >= ts.max_words
-                or len(" ".join(x[0] for x in cur + [w])) > ts.max_chars
-                or (ts.max_seconds > 0 and w[2] - cur[0][1] > ts.max_seconds)
-                or w[1] - cur[-1][2] > break_gap):
+        k = key(w)
+        full = cur and too_big(cur + [w])
+        if cur and k in starts or cur and k not in joins and (
+                full or w[1] - cur[-1][2] > break_gap
+                or (ts.phrases and PHRASE_END.search(cur[-1][0]))):
             chunks.append(cur)
+            by_size.append(bool(full) and k not in starts and w[1] - cur[-1][2] <= break_gap
+                           and not (ts.phrases and PHRASE_END.search(cur[-1][0])))
             cur = []
         cur.append(w)
     if cur:
         chunks.append(cur)
+        by_size.append(False)
+    if ts.phrases:  # 8 words then 2 reads worse than 5 and 5: move words to the next part
+        for i in range(len(chunks) - 1):
+            a, b = chunks[i], chunks[i + 1]
+            while (by_size[i] and len(a) - 1 > len(b) and key(a[-1]) not in joins
+                   and key(b[0]) not in starts and not too_big([a[-1]] + b)):
+                b.insert(0, a.pop())
     return chunks
 
 
@@ -234,10 +256,50 @@ def _ink_extent(pattern: str, size: int, rtl: bool, marks: bool = False) -> tupl
     return int(rows[0]) - size, int(rows[-1]) - size + 1
 
 
+def _rows(words: tuple[str, ...], ts: TextStyle, max_width: int) -> list[tuple[str, ...]]:
+    """The caption as one line if it fits, else in up to ts.lines lines of
+    about the same width (the fewest that fit)."""
+    from itertools import combinations
+
+    rtl = _is_rtl(" ".join(words))
+    font = _font(ts.font if rtl else _latin(ts.font), ts.size)
+    room = max_width - 2 * ts.pad_x - 2 * (ts.shadow * 2 + ts.outline)
+    width = lambda ws: font.getlength(" ".join(ws), direction="rtl" if rtl else "ltr")  # noqa: E731
+    if width(words) <= room:
+        return [words]
+    best = [words]
+    for n in range(2, min(ts.lines, len(words)) + 1):
+        splits = [[words[a:b] for a, b in zip((0, *cut), (*cut, len(words)))]
+                  for cut in combinations(range(1, len(words)), n - 1)]
+        best = min(splits, key=lambda rows: max(width(r) for r in rows))
+        if max(width(r) for r in best) <= room:
+            break
+    return best
+
+
 def render_text(words: tuple[str, ...], ts: TextStyle, active: int = -1,
                 max_width: int = 800) -> np.ndarray:
-    """RGBA image of one caption line. Words are laid out right-to-left for
-    RTL scripts, so punctuation stays at the end of the sentence."""
+    """RGBA image of one caption (on more lines if ts.lines allows and it is
+    too wide for one). Words are laid out right-to-left for RTL scripts, so
+    punctuation stays at the end of the sentence."""
+    if ts.lines > 1 and len(words) > 1:
+        max_width = max(max_width, 960)  # a phrase may use most of the frame's width
+        rows = _rows(words, ts, max_width)
+        if len(rows) > 1:
+            one, imgs, k = replace(ts, lines=1), [], 0
+            for r in rows:
+                imgs.append(render_text(r, one, active - k if active >= 0 else -1, max_width))
+                k += len(r)
+            # without a box, the lines' padding overlaps; boxes stay a little apart
+            gap = 6 if ts.box else int(ts.size * 0.12) - ts.pad_y - ts.shadow * 2 - ts.outline
+            W, H = max(i.shape[1] for i in imgs), sum(i.shape[0] for i in imgs) + gap * (len(imgs) - 1)
+            out, y = Image.new("RGBA", (W, H), (0, 0, 0, 0)), 0
+            for i in imgs:
+                layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                layer.paste(Image.fromarray(i), ((W - i.shape[1]) // 2, y))
+                out = Image.alpha_composite(out, layer)
+                y += i.shape[0] + gap
+            return np.asarray(out)
     rtl = _is_rtl(" ".join(words))
     direction = "rtl" if rtl else "ltr"
     pattern = ts.font if rtl else _latin(ts.font)
@@ -403,9 +465,11 @@ class Overlay:
         if self.title is not None:
             self._blit(frame, self.title, self.style.title.y, 1.0)
         tag, above, ta = self._tag(t)
-        if tag is not None:
-            self._blit(frame, tag, self.style.captions.y - above / frame.shape[0], ta)
         img, alpha = self._caption(t)
+        if tag is not None:
+            if img is not None and self.style.captions.lines > 1:  # right above this caption, one line or two
+                above = img.shape[0] / 2 + tag.shape[0] / 2 + 6
+            self._blit(frame, tag, self.style.captions.y - above / frame.shape[0], ta)
         if img is not None:
             self._blit(frame, img, self.style.captions.y, alpha)
         if self.sub:

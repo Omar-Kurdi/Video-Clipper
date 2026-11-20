@@ -473,6 +473,7 @@ details summary { cursor: pointer; font-weight: 500; }
 .preset-box span { background: rgba(0,0,0,0.65); padding: 3px 7px; border-radius: 3px; }
 .preset-pill span { background: rgba(0,0,0,0.72); padding: 3px 9px; border-radius: 12px; }
 .preset-outline span { font-weight: 700; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 3px #000; }
+.preset-phrase span { font-weight: 700; text-shadow: 0 0 1px #000, 0 1px 4px rgba(0,0,0,0.9); }
 .preset-minimal span { text-shadow: 0 1px 6px rgba(0,0,0,0.9); }
 .preset-custom span { border-bottom: 2px solid var(--fg); }
 .blend-viz { display: flex; height: 22px; border-radius: 3px; overflow: hidden; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
