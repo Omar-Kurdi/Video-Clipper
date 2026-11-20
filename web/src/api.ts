@@ -53,6 +53,7 @@ export interface TextStyle {
   max_seconds?: number;  // longest a caption stays up, 0 = no limit
   lines?: number;  // a caption too wide for one line wraps onto up to this many
   phrases?: boolean;  // a caption ends where a phrase does
+  split?: "words" | "pauses";  // a caption per few words, or per stretch of speech between pauses
   fade_ms: number;
 }
 

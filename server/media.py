@@ -342,40 +342,69 @@ def edit_segment(lid: str, k: int, text: str | None) -> dict:
 
 
 def edit_words(lid: str, i0: int, i1: int, text: str) -> dict:
-    """Replace the text of words i0..i1-1 (a caption) in the transcript. With
-    the same number of words each keeps its timing; otherwise the words must
-    be in one sentence, which is then edited as a whole (see edit_segment)."""
+    """Replace the text of words i0..i1-1 (a caption) in the transcript, which
+    may cover parts of two sentences. Only the words that changed change: a
+    word keeps its timing, and where words were added or removed the new ones
+    share the time of the ones they replace (an added word shares a
+    neighbour's). Every other word keeps its own timing and marks."""
+    import difflib
+
     data = transcript(lid)
     if data is None:
         raise KeyError("transcript")
     tokens = text.split()
     if not tokens:
         raise ValueError("a caption can't be empty")
-    words = data["words"]
+    words, segs = data["words"], data["segments"]
     if not 0 <= i0 < i1 <= len(words):
         raise IndexError("words")
-    segs = [k for k, g in enumerate(data["segments"]) if g["w0"] < i1 and g["w1"] > i0]
-    if len(tokens) != i1 - i0:
-        if len(segs) != 1:
-            raise ValueError("this caption covers two sentences: keep the same number of words, "
-                             "or change the word count in the transcript")
-        g = data["segments"][segs[0]]
-        cur = [w["w"] for w in words[g["w0"]:g["w1"]]]
-        return edit_segment(lid, segs[0], " ".join(cur[:i0 - g["w0"]] + tokens + cur[i1 - g["w0"]:]))
-    # same count: only the changed words change, each keeping its timing
-    for k in segs:
-        g = data["segments"][k]
-        old = [dict(w) for w in words[g["w0"]:g["w1"]]]
-        changed = False
-        for i in range(max(i0, g["w0"]), min(i1, g["w1"])):
-            if words[i]["w"] != tokens[i - i0]:
-                words[i]["w"] = tokens[i - i0]
-                for f in ("flag", "why", "checked"):
-                    words[i].pop(f, None)
-                changed = True
-        if changed:
-            g.setdefault("orig", old)
-            g["edited"] = True
+    old = [w["w"] for w in words[i0:i1]]
+    seg_of = lambda i: next(k for k, g in enumerate(segs) if g["w0"] <= i < g["w1"])  # noqa: E731
+    before = {k: [dict(w) for w in words[g["w0"]:g["w1"]]] for k, g in enumerate(segs) if g["w0"] < i1 and g["w1"] > i0}
+    plain = lambda w: {k: v for k, v in w.items() if k not in ("flag", "alts", "why", "checked")}  # noqa: E731
+    touched = set()
+    # the changed stretches, last first, so the indices of earlier ones stay right
+    for tag, a0, a1, b0, b1 in reversed(difflib.SequenceMatcher(None, old, tokens, autojunk=False).get_opcodes()):
+        if tag == "equal":
+            continue
+        a, b, new_t = i0 + a0, i0 + a1, tokens[b0:b1]
+        if a == b:  # added words share the time of the word before them (or after, at the start)
+            if a0 > 0:
+                a, new_t = a - 1, [words[a - 1]["w"]] + new_t
+            else:
+                b, new_t = b + 1, new_t + [words[b]["w"]]
+        # the stretch may run over a sentence's end: each sentence gets its share of the new words
+        parts, i = [], a
+        while i < b:
+            k = seg_of(i)
+            j = min(b, segs[k]["w1"])
+            parts.append((k, i, j))
+            i = j
+        shares, used, done = [], 0, 0
+        for n, (k, i, j) in enumerate(parts):
+            done += j - i
+            upto = len(new_t) if n == len(parts) - 1 else round(len(new_t) * done / (b - a))
+            shares.append(new_t[used:upto])
+            used = upto
+        for (k, i, j), t in reversed(list(zip(parts, shares))):
+            g = segs[k]
+            if not t and j - i == g["w1"] - g["w0"]:
+                raise ValueError("that would leave a sentence with no words: edit it in the transcript")
+            if len(t) == j - i:  # same count: each word keeps its own timing
+                rep = [plain(w) | {"w": tok} if w["w"] != tok else w for w, tok in zip(words[i:j], t)]
+            else:  # the replaced words' time, shared out by length
+                s0, s1 = words[i]["s"], words[j - 1]["e"]
+                total = sum(len(x) + 1 for x in t) or 1
+                rep, at = [], s0
+                for tok in t:
+                    dur = (s1 - s0) * (len(tok) + 1) / total
+                    rep.append({"w": tok, "s": round(at, 3), "e": round(at + dur * 0.92, 3)})
+                    at += dur
+            splice(data, k, i, j, rep)
+            touched.add(k)
+    for k in touched:
+        segs[k].setdefault("orig", before[k])
+        segs[k]["edited"] = True
     words_path(store.source_path(lid)).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return data
 

@@ -44,6 +44,8 @@ class TextStyle:
     max_seconds: float = 0.0        # longest a caption stays up (0: no limit); longer ones are split
     lines: int = 1                  # a caption too wide for one line wraps onto up to this many
     phrases: bool = False           # a caption ends where a phrase does (، . ؟ and the like)
+    split: str = "words"            # "words": at most max_words a caption; "pauses": all the
+                                    # words between two pauses (a long run split evenly to fit `lines`)
     fade_ms: int = 90
 
 
@@ -165,32 +167,59 @@ def word_key(w) -> float:
 PHRASE_END = re.compile(r"[،؛؟.!?:;,…]$")
 
 
+def _fits_lines(words: list[str], ts: TextStyle, max_width: int = 960) -> bool:
+    """Whether the words fit in ts.lines lines at the caption's size (with some
+    room to spare, as lines rarely break at the exact middle)."""
+    text = " ".join(words)
+    rtl = _is_rtl(text)
+    font = _font(ts.font if rtl else _latin(ts.font), ts.size)
+    room = (max(max_width, 960) if ts.lines > 1 else 800) - 2 * ts.pad_x - 2 * (ts.shadow * 2 + ts.outline)
+    return font.getlength(text, direction="rtl" if rtl else "ltr") <= room * max(1, ts.lines) * 0.85
+
+
 def chunk(mapped: list[Word], ts: TextStyle, break_gap: float = 0.3,
-          starts: set | None = None, joins: set | None = None) -> list[list[Word]]:
+          starts: set | None = None, joins: set | None = None,
+          group_of=None) -> list[list[Word]]:
     """Words into captions. `starts`/`joins` (word keys, see word_key) are the
     user's own splits: a word in `starts` always begins a caption, one in
     `joins` never does. With `ts.phrases` a caption also ends with its phrase,
-    and a phrase too long for one caption is split into even parts."""
+    and a phrase too long for one caption is split into even parts.
+
+    With ts.split == "pauses" a caption is the speech between two pauses:
+    `group_of(word)` names the stretch of speech a word is in (see
+    pipeline._speech_groups), a new stretch starts a new caption, and a caption
+    is split only when it won't fit. Without it, gaps between words count."""
     starts, joins = starts or set(), joins or set()
+    pauses = ts.split == "pauses"
     key = lambda w: word_key(w) if len(w) > 4 else None  # noqa: E731
-    too_big = lambda ws: (len(ws) > ts.max_words or len(" ".join(x[0] for x in ws)) > ts.max_chars  # noqa: E731
-                          or (ts.max_seconds > 0 and ws[-1][2] - ws[0][1] > ts.max_seconds))
+    if pauses:
+        too_big = lambda ws: (not _fits_lines([x[0] for x in ws], ts)  # noqa: E731
+                              or (ts.max_seconds > 0 and ws[-1][2] - ws[0][1] > ts.max_seconds))
+    else:
+        too_big = lambda ws: (len(ws) > ts.max_words or len(" ".join(x[0] for x in ws)) > ts.max_chars  # noqa: E731
+                              or (ts.max_seconds > 0 and ws[-1][2] - ws[0][1] > ts.max_seconds))
+
+    def gap(a, b) -> bool:  # a pause between two words
+        if pauses and group_of and len(a) > 5 and len(b) > 5 and group_of(a) != group_of(b):
+            return True
+        return b[1] - a[2] > break_gap
+
     chunks, cur, by_size = [], [], []  # by_size: the caption was ended only because it was full
     for w in mapped:
         k = key(w)
         full = cur and too_big(cur + [w])
+        paused = cur and gap(cur[-1], w)
         if cur and k in starts or cur and k not in joins and (
-                full or w[1] - cur[-1][2] > break_gap
-                or (ts.phrases and PHRASE_END.search(cur[-1][0]))):
+                full or paused or (ts.phrases and PHRASE_END.search(cur[-1][0]))):
             chunks.append(cur)
-            by_size.append(bool(full) and k not in starts and w[1] - cur[-1][2] <= break_gap
+            by_size.append(bool(full) and k not in starts and not paused
                            and not (ts.phrases and PHRASE_END.search(cur[-1][0])))
             cur = []
         cur.append(w)
     if cur:
         chunks.append(cur)
         by_size.append(False)
-    if ts.phrases:  # 8 words then 2 reads worse than 5 and 5: move words to the next part
+    if ts.phrases or pauses:  # 8 words then 2 reads worse than 5 and 5: move words to the next part
         for i in range(len(chunks) - 1):
             a, b = chunks[i], chunks[i + 1]
             while (by_size[i] and len(a) - 1 > len(b) and key(a[-1]) not in joins
@@ -371,7 +400,7 @@ SUB_GAP = 10  # pixels between the caption's box and the second line's
 def sub_style(ts: TextStyle) -> TextStyle:
     """The second caption line (a translation under the original): smaller,
     longer lines, no word highlight."""
-    return replace(ts, size=max(30, int(ts.size * 0.6)), max_words=7, max_chars=42, max_seconds=0,
+    return replace(ts, size=max(30, int(ts.size * 0.6)), max_words=7, max_chars=42, max_seconds=0, split="words",
                    highlight=None, pad_x=max(10, int(ts.pad_x * 0.8)), pad_y=max(6, int(ts.pad_y * 0.7)))
 
 

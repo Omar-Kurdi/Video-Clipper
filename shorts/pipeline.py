@@ -84,7 +84,34 @@ def in_ranges(words: list[dict], ranges) -> list[dict]:
     return [w for w in words if any(a <= (w["s"] + w["e"]) / 2 < b for a, b in ranges)]
 
 
-def caption_chunks(o: ShortOptions, words: list[dict], segs, fps, d: int, ts) -> list[list]:
+def _speech_groups(video: Path, o: ShortOptions, segs, fps):
+    """For captions split at pauses: which stretch of speech a word belongs
+    to. Pauses come from the audio (as the cut finds them), not from word
+    timings: the recognisers often stretch a word over the silence next to it.
+    A word goes to the stretch it overlaps most, and to the kept piece of the
+    cut it overlaps most, so a cut or a transition always starts a new caption;
+    pauses a little shorter than the ones cut count too."""
+    from .plan import CutSettings, speech_spans
+
+    cs = CutSettings(min_gap=max(0.2, o.min_gap * 0.8))
+    speech = sorted(sp for a, b in o.ranges for sp in speech_spans(video, max(0.0, a - cs.pre_pad), b + cs.post_pad, cs))
+    pieces = [(float(s.f0 / fps), float(s.f1 / fps)) for s in segs]
+
+    def which(spans, a, b):
+        if not spans:
+            return 0
+        over = [min(e, b) - max(s, a) for s, e in spans]
+        k = max(range(len(spans)), key=over.__getitem__)
+        if over[k] > 0:
+            return k
+        mid = (a + b) / 2
+        return min(range(len(spans)), key=lambda i: max(spans[i][0] - mid, mid - spans[i][1], 0))
+
+    return lambda w: (which(pieces, w[4], w[5]), which(speech, w[4], w[5]))
+
+
+def caption_chunks(o: ShortOptions, words: list[dict], segs, fps, d: int, ts,
+                   video: Path | None = None) -> list[list]:
     """The captions exactly as the render burns them in: the transcript words
     of the chosen ranges, grouped into captions, with the user's edits.
     `o.caption_edits`: {"starts": [t], "joins": [t], "times": {"t": [a, b]}},
@@ -96,7 +123,8 @@ def caption_chunks(o: ShortOptions, words: list[dict], segs, fps, d: int, ts) ->
     src = caption_words(in_ranges([{**w, "_i": k} for k, w in enumerate(words)], o.ranges), o.harakat)
     chunks = chunk(map_words(src, segs, fps, d, keep_all=True), ts,
                    starts={round(t, 2) for t in ed.get("starts", [])},
-                   joins={round(t, 2) for t in ed.get("joins", [])})
+                   joins={round(t, 2) for t in ed.get("joins", [])},
+                   group_of=_speech_groups(video, o, segs, fps) if video and ts.split == "pauses" else None)
     times = {round(float(k), 2): v for k, v in (ed.get("times") or {}).items()}
     for n, c in enumerate(chunks):
         span = times.get(word_key(c[0]))
@@ -226,7 +254,7 @@ def caption_list(video: Path, o: ShortOptions) -> dict:
         words = translated_words(video, o.caption_lang)
     o, _ = fit(video, o, load_words(video))
     info, segs, _ = plan_short(video, o, load_words(video))
-    chunks = caption_chunks(o, words, segs, info.fps, o.transition_frames, resolve_style(o).captions)
+    chunks = caption_chunks(o, words, segs, info.fps, o.transition_frames, resolve_style(o).captions, video)
     try:
         sub = sub_chunks(video, o, segs, info.fps, o.transition_frames, resolve_style(o).captions)
     except ValueError:  # no translation yet
@@ -302,7 +330,7 @@ def make_short(video: Path, out: Path, o: ShortOptions, progress: Progress | Non
             if o.quran_tag and o.captions else []  # the tag belongs with the captions
         if o.captions or o.title or tags:
             style = resolve_style(o)
-            chunks = caption_chunks(o, words, segs, fps, d, style.captions) if o.captions else []
+            chunks = caption_chunks(o, words, segs, fps, d, style.captions, video) if o.captions else []
             sub = sub_chunks(video, o, segs, fps, d, style.captions)
             overlay = Overlay(chunks, style, o.title, tags, sub)
 

@@ -281,6 +281,7 @@ and overrides any field — see [styles/example.json](styles/example.json):
 | `max_words`, `max_chars`, `fade_ms` | caption chunking and fade-in |
 | `lines` | a caption too wide for one line wraps onto up to this many (`phrase`: 2) |
 | `phrases` | end a caption where a phrase does (، . ؟ …), splitting a long one evenly |
+| `split` | `"words"` (at most `max_words` a caption) or `"pauses"`: a caption is what is said between two pauses (about as long as the ones the cut removes), so a cut or transition starts a new one; a long stretch is split evenly to fit `lines` |
 
 `captions` styles the subtitles, `title` the name plate (`--title "..."`).
 
